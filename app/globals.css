@@ -2,26 +2,72 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
+@layer base {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    /* Thagai CRM — map shadcn tokens to brand */
+    --background: 28 32% 88%;
+    --foreground: 291 29% 23%;
+    --card: 28 25% 92%;
+    --card-foreground: 291 29% 23%;
+    --popover: 28 25% 96%;
+    --popover-foreground: 291 29% 23%;
+    --primary: 291 29% 23%;
+    --primary-foreground: 28 40% 96%;
+    --secondary: 291 18% 36%;
+    --secondary-foreground: 28 40% 96%;
+    --muted: 28 18% 82%;
+    --muted-foreground: 291 15% 38%;
+    --accent: 16 65% 58%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 50%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 291 15% 78%;
+    --input: 291 12% 75%;
+    --ring: 180 42% 36%;
+    --radius: 0.75rem;
+    --chart-1: 180 42% 36%;
+    --chart-2: 16 65% 58%;
+    --chart-3: 291 29% 23%;
+    --chart-4: 42 55% 52%;
+    --chart-5: 291 18% 40%;
+    --sidebar-background: 291 29% 18%;
+    --sidebar-foreground: 28 35% 94%;
+    --sidebar-primary: 16 65% 58%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 291 22% 26%;
+    --sidebar-accent-foreground: 28 35% 96%;
+    --sidebar-border: 291 18% 28%;
+    --sidebar-ring: 180 42% 36%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    overflow-x: hidden;
   }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+::-webkit-scrollbar {
+  width: 12px;
 }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--primary));
+  border-radius: 6px;
+  border: 3px solid hsl(var(--background));
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(291 18% 36%);
 }
