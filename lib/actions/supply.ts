@@ -8,10 +8,13 @@ import { recomputeSupplyVerificationFromDocuments } from "@/lib/verification-syn
 import { friendlyActionError } from "@/lib/actions/error-messages";
 import { titleCaseName } from "@/lib/text-format";
 
-const aadhaarSchema = z
-  .string()
-  .trim()
-  .regex(/^\d{12}$/, "Enter a valid 12-digit Aadhaar number");
+const aadhaarSchema = z.preprocess(
+  (value) => {
+    const text = typeof value === "string" ? value.trim() : "";
+    return text ? text : null;
+  },
+  z.string().regex(/^\d{12}$/, "Enter a valid 12-digit Aadhaar number").nullable(),
+);
 
 const supplyCore = z.object({
   full_name: z.string().trim().min(1, "Enter the full name.").max(300, "Full name is too long."),
@@ -22,9 +25,9 @@ const supplyCore = z.object({
   state: z.string().max(200).optional().nullable(),
   gender: z.enum(["male", "female", "other"]).optional().nullable(),
   age: z.number().int().min(16).max(100).optional().nullable(),
-  type: z.enum(["caretaker", "nurse"]),
-  availability: z.enum(["12h", "24h", "monthly", "part_time"]),
-  service_scope: z.enum(["chennai_all", "chennai_areas", "outside_chennai"]),
+  type: z.enum(["caretaker", "nurse"]).default("caretaker"),
+  availability: z.enum(["12h", "24h", "monthly", "part_time"]).default("12h"),
+  service_scope: z.enum(["chennai_all", "chennai_areas", "outside_chennai"]).default("chennai_all"),
   languages: z.string().max(500).optional().nullable(),
   salary_12h: z.string().optional().nullable(),
   salary_24h: z.string().optional().nullable(),
@@ -37,7 +40,7 @@ const supplyCore = z.object({
     "reserved",
     "temp_unavailable",
     "inactive",
-  ]),
+  ]).default("available"),
   is_blacklisted: z.boolean().default(false),
   area_free_text: z.string().max(2000).optional().nullable(),
 });
@@ -72,15 +75,15 @@ export async function createSupply(formData: FormData) {
       const n = Number(v);
       return Number.isFinite(n) ? n : null;
     })(),
-    type: formData.get("type"),
-    availability: formData.get("availability"),
-    service_scope: formData.get("service_scope"),
+    type: formData.get("type") || "caretaker",
+    availability: formData.get("availability") || "12h",
+    service_scope: formData.get("service_scope") || "chennai_all",
     languages: formData.get("languages") || null,
     salary_12h: formData.get("salary_12h"),
     salary_24h: formData.get("salary_24h"),
     salary_monthly: formData.get("salary_monthly"),
     aadhaar_number: formData.get("aadhaar_number"),
-    status: formData.get("status"),
+    status: formData.get("status") || "available",
     is_blacklisted: formData.get("is_blacklisted") === "on",
     area_free_text: formData.get("area_free_text") || null,
   };
@@ -152,15 +155,15 @@ export async function updateSupply(id: string, formData: FormData) {
       const n = Number(v);
       return Number.isFinite(n) ? n : null;
     })(),
-    type: formData.get("type"),
-    availability: formData.get("availability"),
-    service_scope: formData.get("service_scope"),
+    type: formData.get("type") || "caretaker",
+    availability: formData.get("availability") || "12h",
+    service_scope: formData.get("service_scope") || "chennai_all",
     languages: formData.get("languages") || null,
     salary_12h: formData.get("salary_12h"),
     salary_24h: formData.get("salary_24h"),
     salary_monthly: formData.get("salary_monthly"),
     aadhaar_number: formData.get("aadhaar_number"),
-    status: formData.get("status"),
+    status: formData.get("status") || "available",
     is_blacklisted: formData.get("is_blacklisted") === "on",
     area_free_text: formData.get("area_free_text") || null,
   };

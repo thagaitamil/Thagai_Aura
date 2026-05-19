@@ -184,7 +184,7 @@ export function LeadForm({
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="requirement_type" required>Requirement type</Label>
+            <Label htmlFor="requirement_type">Requirement type</Label>
             <select
               id="requirement_type"
               name="requirement_type"
@@ -196,7 +196,7 @@ export function LeadForm({
             </select>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="gender_preference" required>Gender preference</Label>
+            <Label htmlFor="gender_preference">Gender preference</Label>
             <select
               id="gender_preference"
               name="gender_preference"
@@ -209,7 +209,7 @@ export function LeadForm({
             </select>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="service_duration" required>Service duration</Label>
+            <Label htmlFor="service_duration">Service duration</Label>
             <select
               id="service_duration"
               name="service_duration"
@@ -282,7 +282,7 @@ export function LeadForm({
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2 md:col-span-2">
-            <Label htmlFor="status" required>Lead status</Label>
+            <Label htmlFor="status">Lead status</Label>
             <select
               id="status"
               name="status"

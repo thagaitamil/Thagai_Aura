@@ -131,14 +131,13 @@ export function SupplyForm({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="aadhaar_number" required>Aadhaar number (12 digits)</Label>
+            <Label htmlFor="aadhaar_number">Aadhaar number (12 digits)</Label>
             <Input
               id="aadhaar_number"
               name="aadhaar_number"
               inputMode="numeric"
               pattern="\d{12}"
               maxLength={12}
-              required
               placeholder="123456789012"
               defaultValue={initial?.aadhaar_number ?? ""}
             />
@@ -197,7 +196,7 @@ export function SupplyForm({
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="service_scope" required>Service scope</Label>
+            <Label htmlFor="service_scope">Service scope</Label>
             <select
               id="service_scope"
               name="service_scope"
@@ -234,7 +233,7 @@ export function SupplyForm({
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="type" required>Type</Label>
+            <Label htmlFor="type">Type</Label>
             <select
               id="type"
               name="type"
@@ -246,7 +245,7 @@ export function SupplyForm({
             </select>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="availability" required>Availability</Label>
+            <Label htmlFor="availability">Availability</Label>
             <select
               id="availability"
               name="availability"
@@ -301,7 +300,7 @@ export function SupplyForm({
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="status" required>Operational status</Label>
+            <Label htmlFor="status">Operational status</Label>
             <select id="status" name="status" className={selectClass} defaultValue={initial?.status ?? "available"}>
               <option value="available">Available</option>
               <option value="on_duty">On duty</option>
@@ -353,7 +352,7 @@ export function SupplyForm({
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="verification_status" required>Verification status</Label>
+              <Label htmlFor="verification_status">Verification status</Label>
               <select
                 id="verification_status"
                 name="verification_status"
