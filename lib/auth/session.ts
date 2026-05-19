@@ -46,3 +46,8 @@ export function canWriteLeads(role: Profile["role"]) {
 export function isAdmin(role: Profile["role"]) {
   return role === "admin";
 }
+
+/** Super-admin style controls (verification override, etc.) — same as admin for now. */
+export function isSuperAdmin(role: Profile["role"]) {
+  return role === "admin";
+}

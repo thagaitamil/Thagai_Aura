@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/command";
 import { FileText, Search, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { signalAuraNavigationStart } from "@/lib/navigation-loading";
 
 type LeadHit = { id: string; name: string; phone: string; sub?: string };
 type SupplyHit = { id: string; full_name: string; phone: string; sub?: string };
@@ -25,6 +26,7 @@ export function GlobalSearch() {
   const [loading, setLoading] = React.useState(false);
   const [leads, setLeads] = React.useState<LeadHit[]>([]);
   const [supply, setSupply] = React.useState<SupplyHit[]>([]);
+  const searchSeq = React.useRef(0);
 
   React.useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -51,13 +53,17 @@ export function GlobalSearch() {
       setLoading(false);
       return;
     }
+    const controller = new AbortController();
+    const seq = searchSeq.current + 1;
+    searchSeq.current = seq;
     const id = setTimeout(async () => {
       setLoading(true);
       try {
         const res = await fetch(
           `/api/search?q=${encodeURIComponent(t)}`,
-          { credentials: "include" }
+          { credentials: "include", signal: controller.signal }
         );
+        if (seq !== searchSeq.current) return;
         if (!res.ok) {
           setLeads([]);
           setSupply([]);
@@ -69,15 +75,23 @@ export function GlobalSearch() {
         };
         setLeads(data.leads ?? []);
         setSupply(data.supply ?? []);
+      } catch {
+        if (controller.signal.aborted) return;
+        setLeads([]);
+        setSupply([]);
       } finally {
-        setLoading(false);
+        if (seq === searchSeq.current) setLoading(false);
       }
     }, 200);
-    return () => clearTimeout(id);
+    return () => {
+      controller.abort();
+      clearTimeout(id);
+    };
   }, [q, open]);
 
   function go(path: string) {
     setOpen(false);
+    signalAuraNavigationStart();
     router.push(path);
   }
 
@@ -107,12 +121,12 @@ export function GlobalSearch() {
         open={open}
         onOpenChange={setOpen}
         title="Search"
-        description="Find leads and supply by name, phone, area or reference"
+        description="Find leads and supply by name, phone, trail ID (L00042), supply ID (S00042), area, or reference"
         className="max-w-lg"
       >
         <Command shouldFilter={false}>
           <CommandInput
-            placeholder="Name, phone, area or reference…"
+            placeholder="Name, phone, L00042, S00042, area…"
             value={q}
             onValueChange={setQ}
           />

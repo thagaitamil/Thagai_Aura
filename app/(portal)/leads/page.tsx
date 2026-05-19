@@ -14,7 +14,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getSessionProfile, canWriteLeads } from "@/lib/auth/session";
 import { cn } from "@/lib/utils";
 import { LeadFilters } from "@/components/leads/lead-filters";
-import { format, isPast } from "date-fns";
+import { format, isPast, startOfDay, endOfDay } from "date-fns";
+import { formatTrailId } from "@/lib/display-ids";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,21 @@ const STATUS_COLORS: Record<string, string> = {
   converted: "bg-emerald-50 text-emerald-700 border-emerald-200",
   closed_lost: "bg-red-50 text-red-600 border-red-200",
 };
+
+function getServiceStatus(row: {
+  start_date?: string | null;
+  end_date?: string | null;
+  service_is_ongoing?: boolean | null;
+}) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const start = row.start_date ? new Date(`${row.start_date}T00:00:00`) : null;
+  const end = !row.service_is_ongoing && row.end_date ? new Date(`${row.end_date}T00:00:00`) : null;
+  if (!start) return { label: "Schedule not set", className: "bg-muted text-muted-foreground border-border" };
+  if (start > today) return { label: "Starting soon", className: "bg-sky-50 text-sky-700 border-sky-200" };
+  if (end && end < today) return { label: "Completed", className: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+  return { label: "Ongoing", className: "bg-amber-50 text-amber-700 border-amber-200" };
+}
 
 export default async function LeadsListPage({
   searchParams,
@@ -51,8 +67,8 @@ export default async function LeadsListPage({
   let query = supabase
     .from("leads")
     .select(
-      `id, name, phone, status, follow_up_required, follow_up_at, created_at, created_by,
-       requirement_type, service_duration, budget_max,
+      `id, name, phone, status, follow_up_required, follow_up_at, created_at, created_by, trail_number,
+       requirement_type, service_duration, budget_max, start_date, end_date, service_is_ongoing,
        lead_assignments(assigned_to, profiles:assigned_to(full_name, email))`
     )
     .is("deleted_at", null)
@@ -105,6 +121,15 @@ export default async function LeadsListPage({
       .eq("follow_up_required", true)
       .not("follow_up_at", "is", null)
       .lt("follow_up_at", new Date().toISOString());
+  }
+  if (p("followup") === "due_today") {
+    const dayStart = startOfDay(new Date()).toISOString();
+    const dayEnd = endOfDay(new Date()).toISOString();
+    query = query
+      .eq("follow_up_required", true)
+      .not("follow_up_at", "is", null)
+      .gte("follow_up_at", dayStart)
+      .lte("follow_up_at", dayEnd);
   }
 
   const { data: rows } = await query;
@@ -164,9 +189,11 @@ export default async function LeadsListPage({
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="font-mono text-xs">Trail</TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Phone</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Service</TableHead>
               <TableHead>Assigned to</TableHead>
               <TableHead>Follow-up</TableHead>
               <TableHead className="text-right">Open</TableHead>
@@ -177,6 +204,7 @@ export default async function LeadsListPage({
               const assignments = Array.isArray(r.lead_assignments) ? r.lead_assignments : [];
               const assignee = assignments[0]?.profiles as { full_name?: string; email?: string } | undefined;
               const assigneeName = assignee?.full_name ?? assignee?.email ?? null;
+              const service = getServiceStatus(r);
 
               const isOverdue =
                 r.follow_up_required &&
@@ -187,6 +215,9 @@ export default async function LeadsListPage({
 
               return (
                 <TableRow key={r.id}>
+                  <TableCell className="font-mono text-xs text-muted-foreground">
+                    {r.trail_number != null ? formatTrailId(r.trail_number as number) : "—"}
+                  </TableCell>
                   <TableCell className="font-medium">{r.name}</TableCell>
                   <TableCell className="text-muted-foreground">{r.phone}</TableCell>
                   <TableCell>
@@ -195,6 +226,11 @@ export default async function LeadsListPage({
                       className={cn("capitalize", STATUS_COLORS[r.status as string] ?? "")}
                     >
                       {String(r.status).replace(/_/g, " ")}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={service.className}>
+                      {service.label}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -228,7 +264,7 @@ export default async function LeadsListPage({
             })}
             {!filtered.length && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                   No leads match the current filters.
                 </TableCell>
               </TableRow>

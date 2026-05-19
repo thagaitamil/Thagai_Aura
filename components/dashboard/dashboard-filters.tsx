@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useCallback, useTransition } from "react";
 import { SlidersHorizontal, X } from "lucide-react";
+import { signalAuraNavigationStart } from "@/lib/navigation-loading";
 
 const selectClass =
   "h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
@@ -22,13 +23,19 @@ export function DashboardFilters({ staff, areas }: { staff: Staff[]; areas: Area
     (key: string, value: string) => {
       const p = new URLSearchParams(params.toString());
       if (value) p.set(key, value); else p.delete(key);
-      start(() => router.replace(`${pathname}?${p.toString()}`));
+      start(() => {
+        signalAuraNavigationStart();
+        router.replace(`${pathname}?${p.toString()}`);
+      });
     },
     [router, pathname, params]
   );
 
   const clear = useCallback(() => {
-    start(() => router.replace(pathname));
+    start(() => {
+      signalAuraNavigationStart();
+      router.replace(pathname);
+    });
   }, [router, pathname]);
 
   const FILTER_KEYS = ["date_from", "date_to", "salesperson", "area", "lead_status", "service_type"];

@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useCallback, useTransition } from "react";
 import { SlidersHorizontal, X } from "lucide-react";
+import { signalAuraNavigationStart } from "@/lib/navigation-loading";
 
 const selectClass =
   "h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
@@ -24,6 +25,7 @@ export function LeadFilters({ areas, staff }: { areas: Area[]; staff: Staff[] })
       if (value) params.set(key, value);
       else params.delete(key);
       startTransition(() => {
+        signalAuraNavigationStart();
         router.replace(`${pathname}?${params.toString()}`);
       });
     },
@@ -32,6 +34,7 @@ export function LeadFilters({ areas, staff }: { areas: Area[]; staff: Staff[] })
 
   const clear = useCallback(() => {
     startTransition(() => {
+      signalAuraNavigationStart();
       router.replace(pathname);
     });
   }, [router, pathname]);
@@ -126,7 +129,7 @@ export function LeadFilters({ areas, staff }: { areas: Area[]; staff: Staff[] })
           <label className="text-xs font-medium text-muted-foreground">Follow-up</label>
           <select className={selectClass} value={get("followup")} onChange={(e) => set("followup", e.target.value)}>
             <option value="">All</option>
-            <option value="overdue">Overdue</option>
+            <option value="due_today">Due today</option>
             <option value="required">Follow-up required</option>
             <option value="none">No follow-up</option>
           </select>

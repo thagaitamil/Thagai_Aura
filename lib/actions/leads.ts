@@ -4,10 +4,12 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { canWriteLeads, getSessionProfile } from "@/lib/auth/session";
+import { friendlyActionError } from "@/lib/actions/error-messages";
+import { titleCaseName } from "@/lib/text-format";
 
 const leadBase = z.object({
-  name: z.string().min(1).max(300),
-  phone: z.string().min(5).max(32),
+  name: z.string().trim().min(1, "Enter the lead name.").max(300, "Lead name is too long."),
+  phone: z.string().trim().min(5, "Enter a valid phone number.").max(32, "Phone number is too long."),
   alt_phone: z.string().max(32).optional().nullable(),
   area_free_text: z.string().max(2000).optional().nullable(),
   full_address: z.string().max(2000).optional().nullable(),
@@ -17,6 +19,8 @@ const leadBase = z.object({
   budget_min: z.string().optional().nullable(),
   budget_max: z.string().optional().nullable(),
   start_date: z.string().optional().nullable(),
+  end_date: z.string().optional().nullable(),
+  service_is_ongoing: z.boolean().optional(),
   special_notes: z.string().max(5000).optional().nullable(),
   status: z.enum([
     "new_lead",
@@ -77,6 +81,8 @@ export async function createLead(formData: FormData) {
     budget_min: formData.get("budget_min"),
     budget_max: formData.get("budget_max"),
     start_date: formData.get("start_date") || null,
+    end_date: formData.get("service_is_ongoing") === "on" ? null : formData.get("end_date") || null,
+    service_is_ongoing: formData.get("service_is_ongoing") === "on",
     special_notes: formData.get("special_notes") || null,
     status: formData.get("status"),
     follow_up_required: formData.get("follow_up_required") === "on",
@@ -84,14 +90,18 @@ export async function createLead(formData: FormData) {
     follow_up_notes: formData.get("follow_up_notes") || null,
   };
   const parsed = leadBase.safeParse(raw);
-  if (!parsed.success) return { error: "Validation failed." };
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Please fix the form and try again." };
+  const primarySupply = String(formData.get("converted_primary_supply") ?? "").trim();
+  if (parsed.data.status === "converted" && !primarySupply) {
+    return { error: "Select the assigned supply profile when marking a lead as converted." };
+  }
   const supabase = createClient();
   const convertedAtValue =
     parsed.data.status === "converted" ? new Date().toISOString() : null;
   const { data, error } = await supabase
     .from("leads")
     .insert({
-      name: parsed.data.name,
+      name: titleCaseName(parsed.data.name),
       phone: parsed.data.phone,
       alt_phone: parsed.data.alt_phone,
       area_free_text: parsed.data.area_free_text,
@@ -102,6 +112,8 @@ export async function createLead(formData: FormData) {
       budget_min: parseNum(parsed.data.budget_min ?? undefined),
       budget_max: parseNum(parsed.data.budget_max ?? undefined),
       start_date: parsed.data.start_date || null,
+      end_date: parsed.data.service_is_ongoing ? null : parsed.data.end_date || null,
+      service_is_ongoing: parsed.data.service_is_ongoing ?? false,
       special_notes: parsed.data.special_notes,
       status: parsed.data.status,
       converted_at: convertedAtValue,
@@ -112,7 +124,7 @@ export async function createLead(formData: FormData) {
     })
     .select("id")
     .single();
-  if (error) return { error: error.message };
+  if (error) return { error: friendlyActionError(error) };
   const areaIds = formData.getAll("area_option_id").filter(Boolean) as string[];
   if (areaIds.length && data?.id) {
     await supabase.from("lead_area_tags").insert(
@@ -126,6 +138,17 @@ export async function createLead(formData: FormData) {
       assigned_to: assignTo,
       assigned_by: profile.id,
     });
+  }
+  if (parsed.data.status === "converted" && data?.id) {
+    const { error: mapErr } = await supabase.from("supply_mapping").insert({
+      lead_id: data.id,
+      supply_id: primarySupply,
+      priority: 1,
+      trial_status: "accepted",
+      created_by: profile.id,
+    });
+    if (mapErr) return { error: friendlyActionError(mapErr) };
+    revalidatePath(`/supply/${primarySupply}`);
   }
   revalidatePath("/leads");
   revalidatePath("/dashboard");
@@ -150,6 +173,8 @@ export async function updateLead(id: string, formData: FormData) {
     budget_min: formData.get("budget_min"),
     budget_max: formData.get("budget_max"),
     start_date: formData.get("start_date") || null,
+    end_date: formData.get("service_is_ongoing") === "on" ? null : formData.get("end_date") || null,
+    service_is_ongoing: formData.get("service_is_ongoing") === "on",
     special_notes: formData.get("special_notes") || null,
     status: formData.get("status"),
     follow_up_required: formData.get("follow_up_required") === "on",
@@ -157,13 +182,18 @@ export async function updateLead(id: string, formData: FormData) {
     follow_up_notes: formData.get("follow_up_notes") || null,
   };
   const parsed = leadBase.safeParse(raw);
-  if (!parsed.success) return { error: "Validation failed." };
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Please fix the form and try again." };
+  const primarySupply = String(formData.get("converted_primary_supply") ?? "").trim();
+  if (parsed.data.status === "converted" && !primarySupply) {
+    return { error: "Select the assigned supply profile when marking a lead as converted." };
+  }
+
   const convertedAtValue =
     parsed.data.status === "converted" ? new Date().toISOString() : null;
   const { error } = await supabase
     .from("leads")
     .update({
-      name: parsed.data.name,
+      name: titleCaseName(parsed.data.name),
       phone: parsed.data.phone,
       alt_phone: parsed.data.alt_phone,
       area_free_text: parsed.data.area_free_text,
@@ -174,6 +204,8 @@ export async function updateLead(id: string, formData: FormData) {
       budget_min: parseNum(parsed.data.budget_min ?? undefined),
       budget_max: parseNum(parsed.data.budget_max ?? undefined),
       start_date: parsed.data.start_date || null,
+      end_date: parsed.data.service_is_ongoing ? null : parsed.data.end_date || null,
+      service_is_ongoing: parsed.data.service_is_ongoing ?? false,
       special_notes: parsed.data.special_notes,
       status: parsed.data.status,
       converted_at: convertedAtValue,
@@ -183,7 +215,7 @@ export async function updateLead(id: string, formData: FormData) {
     })
     .eq("id", id)
     .is("deleted_at", null);
-  if (error) return { error: error.message };
+  if (error) return { error: friendlyActionError(error) };
   await supabase.from("lead_area_tags").delete().eq("lead_id", id);
   const areaIds = formData.getAll("area_option_id").filter(Boolean) as string[];
   if (areaIds.length) {
@@ -202,6 +234,20 @@ export async function updateLead(id: string, formData: FormData) {
   } else {
     await supabase.from("lead_assignments").delete().eq("lead_id", id);
   }
+
+  if (parsed.data.status === "converted" && primarySupply) {
+    await supabase.from("supply_mapping").delete().eq("lead_id", id);
+    const { error: mapErr } = await supabase.from("supply_mapping").insert({
+      lead_id: id,
+      supply_id: primarySupply,
+      priority: 1,
+      trial_status: "accepted",
+      created_by: profile.id,
+    });
+    if (mapErr) return { error: friendlyActionError(mapErr) };
+    revalidatePath(`/supply/${primarySupply}`);
+  }
+
   revalidatePath("/leads");
   revalidatePath(`/leads/${id}`);
   revalidatePath("/dashboard");
@@ -224,7 +270,7 @@ export async function addLeadActivity(
     notes,
     created_by: profile.id,
   });
-  if (error) return { error: error.message };
+  if (error) return { error: friendlyActionError(error) };
   revalidatePath(`/leads/${leadId}`);
   return { success: true };
 }
@@ -270,7 +316,7 @@ export async function saveLeadMappings(
   });
   if (dedupedRows.length) {
     const { error } = await supabase.from("supply_mapping").insert(dedupedRows);
-    if (error) return { error: error.message };
+    if (error) return { error: friendlyActionError(error) };
   }
   revalidatePath(`/leads/${leadId}`);
   return { success: true };
@@ -290,7 +336,7 @@ export async function updateMappingTrial(
     .from("supply_mapping")
     .update({ trial_status, updated_at: new Date().toISOString() })
     .eq("id", mappingId);
-  if (error) return { error: error.message };
+  if (error) return { error: friendlyActionError(error) };
   revalidatePath(`/leads/${leadId}`);
   return { success: true };
 }
@@ -309,7 +355,7 @@ export async function setMappingReserved(
     .from("supply_mapping")
     .update({ is_reserved, updated_at: new Date().toISOString() })
     .eq("id", mappingId);
-  if (error) return { error: error.message };
+  if (error) return { error: friendlyActionError(error) };
   revalidatePath(`/leads/${leadId}`);
   return { success: true };
 }
@@ -331,7 +377,7 @@ export async function uploadLeadDocument(formData: FormData) {
   const { error: upErr } = await supabase.storage
     .from("crm-docs")
     .upload(path, file, { contentType: file.type || "application/octet-stream" });
-  if (upErr) return { error: upErr.message };
+  if (upErr) return { error: friendlyActionError(upErr) };
   const { error } = await supabase.from("lead_documents").insert({
     lead_id: leadId,
     doc_type: docType,
@@ -341,7 +387,7 @@ export async function uploadLeadDocument(formData: FormData) {
     size_bytes: file.size,
     uploaded_by: profile.id,
   });
-  if (error) return { error: error.message };
+  if (error) return { error: friendlyActionError(error) };
   revalidatePath(`/leads/${leadId}`);
   return { success: true };
 }
@@ -365,7 +411,7 @@ export async function addLeadFollowUpRow(leadId: string, formData: FormData) {
     outcome: "pending",
     created_by: profile.id,
   });
-  if (insErr) return { error: insErr.message };
+  if (insErr) return { error: friendlyActionError(insErr) };
   await supabase
     .from("leads")
     .update({
@@ -398,7 +444,7 @@ export async function setLeadFollowUpOutcome(
     })
     .eq("id", followUpId)
     .eq("lead_id", leadId);
-  if (error) return { error: error.message };
+  if (error) return { error: friendlyActionError(error) };
   revalidatePath(`/leads/${leadId}`);
   revalidatePath("/leads");
   revalidatePath("/dashboard");

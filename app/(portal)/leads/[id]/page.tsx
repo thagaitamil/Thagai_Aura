@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionProfile, canWriteLeads } from "@/lib/auth/session";
 import { LeadForm } from "@/components/leads/lead-form";
+import { formatSupplyDisplayId } from "@/lib/display-ids";
 import {
   LeadDetailTabs,
   type LeadFollowUpRow,
@@ -59,7 +60,7 @@ export default async function LeadDetailPage({
 
   const { data: mappings } = await supabase
     .from("supply_mapping")
-    .select("*, supply_profiles(full_name, status, type)")
+    .select("*, supply_profiles(full_name, status, type, supply_number)")
     .eq("lead_id", id)
     .order("priority", { ascending: true });
 
@@ -88,6 +89,23 @@ export default async function LeadDetailPage({
     ...row,
     area_option_ids: (tagRows ?? []).map((t) => t.area_option_id),
   };
+
+  const primaryMapping = (mappings ?? []).find((m) => m.priority === 1);
+  const convertedSupplyId = primaryMapping?.supply_id ?? null;
+  let convertedSupplyLabel: string | null = null;
+  if (convertedSupplyId) {
+    const sp = primaryMapping?.supply_profiles as
+      | { full_name?: string | null; supply_number?: number | null }
+      | null
+      | undefined;
+    const name = sp?.full_name ?? null;
+    const num = sp?.supply_number;
+    if (name && num != null) {
+      convertedSupplyLabel = `${name} (${formatSupplyDisplayId(num)})`;
+    } else if (name) {
+      convertedSupplyLabel = name;
+    }
+  }
 
   if (!canWrite) {
     return (
@@ -120,6 +138,9 @@ export default async function LeadDetailPage({
             staff={staff ?? []}
             initial={initial}
             defaultAssignedTo={assignment?.assigned_to ?? null}
+            isAdmin={profile?.role === "admin"}
+            convertedSupplyId={convertedSupplyId}
+            convertedSupplyLabel={convertedSupplyLabel}
           />
         }
       />

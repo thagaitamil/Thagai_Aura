@@ -28,7 +28,13 @@ export default async function NewLeadPage() {
           Log the inquiry, attach area tags, and add optional free-text location notes.
         </p>
       </div>
-      <LeadForm mode="create" areas={areas ?? []} staff={staff ?? []} />
+      <LeadForm
+        mode="create"
+        areas={areas ?? []}
+        staff={staff ?? []}
+        isAdmin={profile.role === "admin"}
+        defaultAssignedTo={profile.id}
+      />
     </div>
   );
 }

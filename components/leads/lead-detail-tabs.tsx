@@ -6,17 +6,21 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { DocumentUploadDialog, documentTypeLabel } from "@/components/shared/document-upload-dialog";
 import {
   CalendarClock,
+  CheckCircle2,
   FileText,
   MessageSquare,
+  Upload,
   UserCircle,
+  UserRoundCheck,
   Users,
 } from "lucide-react";
 import { format } from "date-fns";
 import { useRouter } from "next/navigation";
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -29,6 +33,7 @@ import {
   uploadLeadDocument,
 } from "@/lib/actions/leads";
 import { getSignedCrmDocUrl } from "@/lib/actions/documents";
+import { formatSupplyDisplayId } from "@/lib/display-ids";
 
 export type LeadSupplyMappingRow = {
   id: string;
@@ -36,7 +41,12 @@ export type LeadSupplyMappingRow = {
   supply_id: string;
   trial_status: string;
   is_reserved: boolean;
-  supply_profiles: { full_name: string; status: string; type: string } | null;
+  supply_profiles: {
+    full_name: string;
+    status: string;
+    type: string;
+    supply_number?: number | null;
+  } | null;
 };
 
 export type LeadFollowUpRow = {
@@ -50,11 +60,22 @@ export type LeadFollowUpRow = {
 
 const NAV_ITEMS = [
   { value: "profile",      label: "Lead",             Icon: UserCircle    },
+  { value: "assigned",     label: "Assigned supply",  Icon: UserRoundCheck },
   { value: "followups",    label: "Follow-ups",        Icon: CalendarClock },
   { value: "conversation", label: "Conversation",      Icon: MessageSquare },
   { value: "mapping",      label: "Suggested supply",  Icon: Users         },
   { value: "documents",    label: "Documents",         Icon: FileText      },
 ] as const;
+
+const LEAD_DOCUMENT_TYPES = [
+  { value: "aadhaar", label: "Aadhaar card" },
+  { value: "smart_card", label: "Smart card" },
+  { value: "agreement", label: "Agreement" },
+  { value: "id_proof", label: "ID proof" },
+  { value: "address_proof", label: "Address proof" },
+  { value: "medical", label: "Medical" },
+  { value: "other", label: "Other" },
+];
 
 export function LeadDetailTabs({
   leadId,
@@ -75,17 +96,31 @@ export function LeadDetailTabs({
 }) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<string>("profile");
+  const [tabStripBusy, setTabStripBusy] = useState(false);
   const [actType, setActType] = useState("note");
   const [actNotes, setActNotes] = useState("");
+  const [leadDocType, setLeadDocType] = useState("aadhaar");
+  const [leadUploadOpen, setLeadUploadOpen] = useState(false);
 
   // Optimistic lists
   const [activities, setActivities] = useState(activitiesProp);
   const [followUps, setFollowUps] = useState(followUpsProp);
   const [documents, setDocuments] = useState(documentsProp);
+  const hasAadhaar = documents.some((d) => d.doc_type === "aadhaar");
+  const hasSmartCard = documents.some((d) => d.doc_type === "smart_card");
 
   useEffect(() => setActivities(activitiesProp), [activitiesProp]);
   useEffect(() => setFollowUps(followUpsProp), [followUpsProp]);
   useEffect(() => setDocuments(documentsProp), [documentsProp]);
+
+  const selectTab = useCallback((v: string) => {
+    setActiveTab((cur) => {
+      if (cur === v) return cur;
+      setTabStripBusy(true);
+      window.setTimeout(() => setTabStripBusy(false), 320);
+      return v;
+    });
+  }, []);
 
   const p1 = mappings.find((m) => m.priority === 1)?.supply_id ?? "";
   const p2 = mappings.find((m) => m.priority === 2)?.supply_id ?? "";
@@ -102,6 +137,8 @@ export function LeadDetailTabs({
   function syncRefresh() {
     startTransition(() => { router.refresh(); });
   }
+
+  const primaryMapping = mappings.find((m) => m.priority === 1);
 
   async function submitActivity(e: React.FormEvent) {
     e.preventDefault();
@@ -154,7 +191,7 @@ export function LeadDetailTabs({
             <button
               key={value}
               type="button"
-              onClick={() => setActiveTab(value)}
+              onClick={() => selectTab(value)}
               className={cn(
                 "flex items-center gap-2 shrink-0 rounded-lg px-3 py-2",
                 "text-sm font-medium justify-start w-auto md:w-full whitespace-nowrap",
@@ -172,12 +209,60 @@ export function LeadDetailTabs({
       </div>
 
       {/* ── Content panels ──────────────────────────────────────── */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 min-w-0">
+      <Tabs value={activeTab} onValueChange={selectTab} className="relative flex-1 min-w-0">
       <div className="flex-1 min-w-0">
+        {tabStripBusy && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute left-0 right-0 top-0 z-30 h-1 overflow-hidden rounded-full bg-muted shadow-sm"
+          >
+            <div className="h-full w-full animate-pulse bg-accent shadow-[0_0_8px_hsl(var(--accent))]" />
+          </div>
+        )}
 
         {/* Lead profile */}
         <TabsContent value="profile" className="mt-0">
           {profileForm}
+        </TabsContent>
+
+        {/* Assigned supply */}
+        <TabsContent value="assigned" className="mt-0 space-y-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="font-serif text-lg">Assigned supply</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                This is set when the lead is converted. The supply profile shows this lead as a read-only customer assignment.
+              </p>
+            </CardHeader>
+            <CardContent className="text-sm">
+              {primaryMapping?.supply_profiles ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="font-medium">{primaryMapping.supply_profiles.full_name}</div>
+                    <div className="mt-0.5 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      {primaryMapping.supply_profiles.supply_number != null && (
+                        <span className="font-mono">
+                          {formatSupplyDisplayId(primaryMapping.supply_profiles.supply_number)}
+                        </span>
+                      )}
+                      <span className="capitalize">{primaryMapping.supply_profiles.type}</span>
+                      <span className="capitalize">{primaryMapping.supply_profiles.status.replace(/_/g, " ")}</span>
+                    </div>
+                  </div>
+                  <a
+                    href={`/supply/${primaryMapping.supply_id}`}
+                    className="shrink-0 text-xs text-primary hover:underline"
+                  >
+                    Open supply
+                  </a>
+                </div>
+              ) : (
+                <p className="rounded-lg border border-dashed border-border/80 bg-muted/20 p-3 text-muted-foreground">
+                  No supply assigned yet. Change status to Converted in the lead form to select a supply.
+                </p>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Follow-ups */}
@@ -219,7 +304,7 @@ export function LeadDetailTabs({
                 }}
               >
                 <div className="space-y-2">
-                  <Label htmlFor="fu_due">Due</Label>
+                  <Label htmlFor="fu_due" required>Due</Label>
                   <Input id="fu_due" name="due_at" type="datetime-local" required />
                 </div>
                 <div className="md:col-span-2 space-y-2">
@@ -321,7 +406,7 @@ export function LeadDetailTabs({
             <CardContent>
               <form onSubmit={submitActivity} className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label>Type</Label>
+                  <Label required>Type</Label>
                   <select
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                     value={actType}
@@ -467,72 +552,86 @@ export function LeadDetailTabs({
         <TabsContent value="documents" className="mt-0 space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="font-serif text-lg">Upload</CardTitle>
+              <CardTitle className="font-serif text-lg">Lead documents</CardTitle>
             </CardHeader>
-            <CardContent>
-              <form
-                className="grid gap-4 md:grid-cols-2"
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  const form = e.currentTarget;
-                  const fd = new FormData(form);
-                  fd.set("lead_id", leadId);
-                  const docType = String(fd.get("doc_type") || "");
-                  const fileInput = form.querySelector<HTMLInputElement>('input[type="file"]');
-                  const fileName = fileInput?.files?.[0]?.name ?? "";
-                  const r = await uploadLeadDocument(fd);
-                  if (r.error) toast.error(r.error);
-                  else {
-                    toast.success("Uploaded");
-                    if (fileName) {
-                      setDocuments((prev) => [
-                        {
-                          id: crypto.randomUUID(),
-                          doc_type: docType,
-                          file_name: fileName,
-                          storage_path: "",
-                          created_at: new Date().toISOString(),
-                        },
-                        ...prev,
-                      ]);
-                    }
-                    form.reset();
-                    syncRefresh();
-                  }
+            <CardContent className="space-y-3">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className={cn("h-auto justify-start gap-2 rounded-lg px-3 py-3 text-left", hasAadhaar && "border-emerald-200 bg-emerald-50 text-emerald-700")}
+                  onClick={() => {
+                    setLeadDocType("aadhaar");
+                    setLeadUploadOpen(true);
+                  }}
+                >
+                  <CheckCircle2 className={cn("size-4", hasAadhaar ? "opacity-100" : "opacity-40")} />
+                  Aadhaar card {hasAadhaar ? "uploaded" : "upload"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className={cn("h-auto justify-start gap-2 rounded-lg px-3 py-3 text-left", hasSmartCard && "border-emerald-200 bg-emerald-50 text-emerald-700")}
+                  onClick={() => {
+                    setLeadDocType("smart_card");
+                    setLeadUploadOpen(true);
+                  }}
+                >
+                  <CheckCircle2 className={cn("size-4", hasSmartCard ? "opacity-100" : "opacity-40")} />
+                  Smart card {hasSmartCard ? "uploaded" : "upload"}
+                </Button>
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-fit"
+                onClick={() => {
+                  setLeadDocType("other");
+                  setLeadUploadOpen(true);
                 }}
               >
-                <input type="hidden" name="lead_id" value={leadId} />
-                <div className="space-y-2">
-                  <Label>Type</Label>
-                  <select
-                    name="doc_type"
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  >
-                    <option value="agreement">Agreement</option>
-                    <option value="id_proof">ID proof</option>
-                    <option value="address_proof">Address proof</option>
-                    <option value="medical">Medical</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <Label>File</Label>
-                  <Input name="file" type="file" required accept=".pdf,.jpg,.jpeg,.png" />
-                </div>
-                <button
-                  type="submit"
-                  className={cn(buttonVariants(), "w-fit bg-accent text-accent-foreground hover:bg-accent/90")}
-                >
-                  Upload
-                </button>
-              </form>
+                <Upload className="size-4" />
+                Upload another document
+              </Button>
             </CardContent>
           </Card>
+          <DocumentUploadDialog
+            title={`Upload ${documentTypeLabel(leadDocType)}`}
+            description="Choose the file and upload it here. The document list updates after upload."
+            open={leadUploadOpen}
+            onOpenChange={setLeadUploadOpen}
+            docType={leadDocType}
+            setDocType={setLeadDocType}
+            options={LEAD_DOCUMENT_TYPES}
+            hiddenFields={{ lead_id: leadId }}
+            onSubmit={async (fd, context) => {
+              const r = await uploadLeadDocument(fd);
+              if (r.error) {
+                toast.error(r.error);
+                return false;
+              }
+              toast.success("Uploaded");
+              if (context.fileName) {
+                setDocuments((prev) => [
+                  {
+                    id: crypto.randomUUID(),
+                    doc_type: context.docType,
+                    file_name: context.fileName,
+                    storage_path: "",
+                    created_at: new Date().toISOString(),
+                  },
+                  ...prev,
+                ]);
+              }
+              syncRefresh();
+              return true;
+            }}
+          />
           <ul className="space-y-2 text-sm">
             {documents.map((d) => (
               <li key={String(d.id)} className="flex flex-wrap justify-between gap-2 rounded-lg border border-border/60 bg-card p-3">
                 <span>
-                  <span className="capitalize">{String(d.doc_type).replace(/_/g, " ")}</span>
+                  <span className="capitalize">{documentTypeLabel(String(d.doc_type))}</span>
                   {" — "}{String(d.file_name)}
                 </span>
                 <button

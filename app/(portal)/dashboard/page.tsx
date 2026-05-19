@@ -173,7 +173,7 @@ export default async function DashboardPage({
       .is("deleted_at", null).eq("is_blacklisted", true),
     supabase.from("supply_profiles").select("id", { count: "exact", head: true })
       .is("deleted_at", null).eq("verification_status", "pending"),
-    // Trials scheduled today
+    // Follow-ups due today (was mislabeled as trials)
     supabase.from("lead_follow_ups").select("id", { count: "exact", head: true })
       .gte("due_at", todayStart).lte("due_at", todayEnd),
     statusRowsBase(),
@@ -328,7 +328,12 @@ export default async function DashboardPage({
           <MetricTile title="Total supply" value={supplyTotal.count ?? 0} accent href="/supply" />
           <MetricTile title="Available" value={availableSupply.count ?? 0} href="/supply?availability=available" />
           <MetricTile title="On duty / occupied" value={occupiedSupply.count ?? 0} href="/supply?status=on_duty" />
-          <MetricTile title="Trials today" value={trialsToday.count ?? 0} href="/supply" />
+          <MetricTile
+            title="Follow-ups due today"
+            value={trialsToday.count ?? 0}
+            sub="Scheduled for today"
+            href="/leads?followup=due_today"
+          />
           <MetricTile title="Verification pending" value={verificationPending.count ?? 0} warning href="/supply?verified=pending" />
           <MetricTile title="Blacklisted" value={blacklistedSupply.count ?? 0} warning href="/supply?blacklisted=true" />
           <MetricTile title="Caretakers" value={caretakers} href="/supply?type=caretaker" />

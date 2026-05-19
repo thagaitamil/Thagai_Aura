@@ -15,6 +15,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getSessionProfile, canWriteSupply } from "@/lib/auth/session";
 import { cn } from "@/lib/utils";
 import { SupplyFilters } from "@/components/supply/supply-filters";
+import { formatSupplyDisplayId } from "@/lib/display-ids";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +42,7 @@ export default async function SupplyListPage({
   let query = supabase
     .from("supply_profiles")
     .select(
-      "id, full_name, phone, type, availability, status, verification_status, is_blacklisted, gender, salary_12h"
+      "id, full_name, phone, type, availability, status, verification_status, is_blacklisted, gender, salary_12h, supply_number"
     )
     .is("deleted_at", null)
     .order("created_at", { ascending: false })
@@ -149,6 +150,7 @@ export default async function SupplyListPage({
           <TableHeader>
             <TableRow>
               <TableHead className="w-10"></TableHead>
+              <TableHead className="font-mono text-xs">Supply</TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Phone</TableHead>
               <TableHead>Type</TableHead>
@@ -175,6 +177,9 @@ export default async function SupplyListPage({
                         </div>
                       )}
                     </div>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">
+                    {r.supply_number != null ? formatSupplyDisplayId(r.supply_number as number) : "—"}
                   </TableCell>
                   <TableCell className="font-medium">
                     <div className="flex items-center gap-2">
@@ -228,7 +233,7 @@ export default async function SupplyListPage({
             })}
             {!filtered.length && (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                   No supply profiles match the current filters.
                 </TableCell>
               </TableRow>

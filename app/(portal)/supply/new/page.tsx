@@ -20,10 +20,14 @@ export default async function NewSupplyPage() {
       <div>
         <h1 className="font-serif text-2xl font-semibold text-foreground">Add supply</h1>
         <p className="text-sm text-muted-foreground">
-          Pick admin-defined area tags and add optional free-text location notes.
+          Add a profile with areas, languages, Aadhaar, and documents. Search or create locations inline.
         </p>
       </div>
-      <SupplyForm mode="create" areas={areas ?? []} />
+      <SupplyForm
+        mode="create"
+        areas={areas ?? []}
+        isAdmin={profile.role === "admin"}
+      />
     </div>
   );
 }

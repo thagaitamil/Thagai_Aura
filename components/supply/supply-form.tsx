@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { startTransition, useState } from "react";
+import { startTransition, useMemo, useState } from "react";
 import { createSupply, updateSupply } from "@/lib/actions/supply";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { AreaTagPicker } from "@/components/shared/area-tag-picker";
+import { storedToLanguages } from "@/lib/constants/indian-languages";
+import { LanguagePicker } from "@/components/shared/language-picker";
+import { formatSupplyDisplayId } from "@/lib/display-ids";
+import { signalAuraNavigationStart } from "@/lib/navigation-loading";
+import { titleCaseName } from "@/lib/text-format";
 
 type Area = { id: string; label: string };
 
@@ -32,6 +38,9 @@ type SupplyRow = {
   salary_monthly: number | null;
   verification_status: string;
   verification_notes: string | null;
+  verification_manual_override?: boolean | null;
+  aadhaar_number?: string | null;
+  supply_number?: number | null;
   status: string;
   is_blacklisted: boolean;
   area_free_text: string | null;
@@ -44,29 +53,39 @@ export function SupplyForm({
   mode,
   areas,
   initial,
+  isAdmin,
 }: {
   mode: "create" | "edit";
   areas: Area[];
   initial?: SupplyRow & { area_option_ids?: string[] };
+  isAdmin: boolean;
 }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const langSel = useMemo(
+    () => storedToLanguages(initial?.languages ?? null),
+    [initial?.languages]
+  );
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    setPending(true);
     const fd = new FormData(e.currentTarget);
+    setPending(true);
     const res =
       mode === "create"
         ? await createSupply(fd)
         : await updateSupply(initial!.id, fd);
     setPending(false);
     if ("error" in res && res.error) {
+      setFormError(res.error);
       toast.error(res.error);
       return;
     }
+    setFormError(null);
     toast.success(mode === "create" ? "Supply created" : "Saved");
     if (mode === "create" && "id" in res && res.id) {
+      signalAuraNavigationStart();
       router.push(`/supply/${res.id}`);
     } else {
       startTransition(() => {
@@ -75,24 +94,57 @@ export function SupplyForm({
     }
   }
 
+  const areaIds = initial?.area_option_ids ?? [];
+
   return (
     <form onSubmit={onSubmit} className="space-y-8">
+      {mode === "edit" && initial?.supply_number != null && (
+        <p className="text-sm text-muted-foreground">
+          Supply ID:{" "}
+          <span className="font-mono font-semibold text-foreground">
+            {formatSupplyDisplayId(initial.supply_number)}
+          </span>
+        </p>
+      )}
+
+      {formError && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {formError}
+        </div>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="font-serif text-lg">Basic details</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div className="md:col-span-2 space-y-2">
-            <Label htmlFor="full_name">Full name</Label>
+            <Label htmlFor="full_name" required>Full name</Label>
             <Input
               id="full_name"
               name="full_name"
               required
               defaultValue={initial?.full_name}
+              onBlur={(event) => {
+                event.currentTarget.value = titleCaseName(event.currentTarget.value);
+              }}
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="phone">Phone</Label>
+            <Label htmlFor="aadhaar_number" required>Aadhaar number (12 digits)</Label>
+            <Input
+              id="aadhaar_number"
+              name="aadhaar_number"
+              inputMode="numeric"
+              pattern="\d{12}"
+              maxLength={12}
+              required
+              placeholder="123456789012"
+              defaultValue={initial?.aadhaar_number ?? ""}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="phone" required>Phone</Label>
             <Input id="phone" name="phone" required defaultValue={initial?.phone} />
           </div>
           <div className="space-y-2">
@@ -145,7 +197,7 @@ export function SupplyForm({
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="service_scope">Service scope</Label>
+            <Label htmlFor="service_scope" required>Service scope</Label>
             <select
               id="service_scope"
               name="service_scope"
@@ -157,28 +209,12 @@ export function SupplyForm({
               <option value="outside_chennai">Outside Chennai</option>
             </select>
           </div>
-          <div className="space-y-2">
-            <Label>Area tags (admin-managed)</Label>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {areas.map((a) => (
-                <label key={a.id} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    name="area_option_id"
-                    value={a.id}
-                    defaultChecked={initial?.area_option_ids?.includes(a.id)}
-                    className="size-4 rounded border border-input"
-                  />
-                  {a.label}
-                </label>
-              ))}
-              {!areas.length && (
-                <p className="text-sm text-muted-foreground">
-                  No area tags yet. Ask an admin to add them under Admin → Area tags.
-                </p>
-              )}
-            </div>
-          </div>
+          <AreaTagPicker
+            initialSelectedIds={areaIds}
+            initialAreas={areas}
+            label="Locations served"
+            hint="Search existing locations or add a new one. It is saved for the whole team."
+          />
           <div className="space-y-2">
             <Label htmlFor="area_free_text">Optional area / location notes (free text)</Label>
             <Textarea
@@ -198,7 +234,7 @@ export function SupplyForm({
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="type">Type</Label>
+            <Label htmlFor="type" required>Type</Label>
             <select
               id="type"
               name="type"
@@ -210,7 +246,7 @@ export function SupplyForm({
             </select>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="availability">Availability</Label>
+            <Label htmlFor="availability" required>Availability</Label>
             <select
               id="availability"
               name="availability"
@@ -223,9 +259,8 @@ export function SupplyForm({
               <option value="part_time">Part-time</option>
             </select>
           </div>
-          <div className="md:col-span-2 space-y-2">
-            <Label htmlFor="languages">Languages (comma-separated)</Label>
-            <Input id="languages" name="languages" defaultValue={initial?.languages ?? ""} />
+          <div className="md:col-span-2">
+            <LanguagePicker initialSelected={langSel} />
           </div>
           <div className="space-y-2">
             <Label htmlFor="salary_12h">Expected salary (12h)</Label>
@@ -262,24 +297,11 @@ export function SupplyForm({
 
       <Card>
         <CardHeader>
-          <CardTitle className="font-serif text-lg">Verification & status</CardTitle>
+          <CardTitle className="font-serif text-lg">Operational status</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="verification_status">Verification</Label>
-            <select
-              id="verification_status"
-              name="verification_status"
-              className={selectClass}
-              defaultValue={initial?.verification_status ?? "pending"}
-            >
-              <option value="verified">Verified</option>
-              <option value="pending">Pending</option>
-              <option value="not_verified">Not verified</option>
-            </select>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="status">Operational status</Label>
+            <Label htmlFor="status" required>Operational status</Label>
             <select id="status" name="status" className={selectClass} defaultValue={initial?.status ?? "available"}>
               <option value="available">Available</option>
               <option value="on_duty">On duty</option>
@@ -288,15 +310,6 @@ export function SupplyForm({
               <option value="temp_unavailable">Temporarily unavailable</option>
               <option value="inactive">Permanently inactive</option>
             </select>
-          </div>
-          <div className="md:col-span-2 space-y-2">
-            <Label htmlFor="verification_notes">Verification notes</Label>
-            <Textarea
-              id="verification_notes"
-              name="verification_notes"
-              rows={3}
-              defaultValue={initial?.verification_notes ?? ""}
-            />
           </div>
           <div className="flex items-center gap-2 md:col-span-2">
             <input
@@ -311,6 +324,76 @@ export function SupplyForm({
           </div>
         </CardContent>
       </Card>
+
+      {!isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="font-serif text-lg">Verification</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>
+              Status:{" "}
+              <span className="font-medium capitalize text-foreground">
+                {(initial?.verification_status ?? "pending").replace(/_/g, " ")}
+              </span>
+            </p>
+            <p>
+              When both <strong>Aadhaar</strong> and <strong>Smart card</strong> are uploaded under
+              Documents, this profile is marked <strong>verified</strong> automatically unless an admin
+              locks or overrides verification after document review.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="font-serif text-lg">Verification (admin)</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="verification_status" required>Verification status</Label>
+              <select
+                id="verification_status"
+                name="verification_status"
+                className={selectClass}
+                defaultValue={initial?.verification_status ?? "pending"}
+              >
+                <option value="verified">Verified</option>
+                <option value="pending">Pending</option>
+                <option value="not_verified">Not verified</option>
+              </select>
+            </div>
+            <div className="md:col-span-2 space-y-2">
+              <Label htmlFor="verification_notes">Verification notes</Label>
+              <Textarea
+                id="verification_notes"
+                name="verification_notes"
+                rows={3}
+                defaultValue={initial?.verification_notes ?? ""}
+              />
+            </div>
+            <div className="flex items-start gap-2 md:col-span-2">
+              <input
+                type="checkbox"
+                id="allow_auto_verify"
+                name="allow_auto_verify"
+                value="on"
+                defaultChecked={!(initial?.verification_manual_override ?? false)}
+                className="mt-1 size-4 rounded border border-input"
+              />
+              <div>
+                <Label htmlFor="allow_auto_verify">Allow automatic verification from documents</Label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Turn off after marking someone not verified (e.g. fake documents) so the system does not
+                  flip them back to verified when both files are present.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex gap-3">
         <Button type="submit" disabled={pending} className="bg-accent text-accent-foreground">

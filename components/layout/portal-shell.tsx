@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { Suspense } from "react";
+import { NavigationProgress } from "@/components/layout/navigation-progress";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Users,
   UserCircle2,
-  MapPinned,
   LogOut,
   ClipboardList,
   ShieldCheck,
@@ -41,7 +42,6 @@ const nav = [
 ];
 
 const adminNav = [
-  { href: "/admin/areas", label: "Area tags", icon: MapPinned },
   { href: "/admin/users", label: "Team users", icon: UserCircle2 },
   { href: "/admin/permissions", label: "Permissions", icon: ShieldCheck },
 ];
@@ -86,6 +86,9 @@ export function PortalShell({
 }) {
   return (
     <TooltipProvider>
+      <Suspense fallback={null}>
+        <NavigationProgress />
+      </Suspense>
       <SidebarProvider className="h-svh overflow-hidden">
         <Sidebar className="border-sidebar-border">
           <SidebarHeader className="gap-2 border-b border-sidebar-border p-4">
@@ -93,9 +96,9 @@ export function PortalShell({
               href="/dashboard"
               className="font-serif text-lg font-semibold tracking-tight text-sidebar-foreground hover:text-sidebar-primary"
             >
-              Thagai CRM
+              Aura
             </Link>
-            <p className="text-xs text-sidebar-foreground/70">Internal operations</p>
+            <p className="text-xs text-sidebar-foreground/70">Operations CRM</p>
           </SidebarHeader>
           <SidebarContent>
             <SidebarGroup>
@@ -153,7 +156,7 @@ export function PortalShell({
             <Separator orientation="vertical" className="h-6" />
             <GlobalSearch />
             <Separator orientation="vertical" className="hidden h-6 sm:block" />
-            <span className="text-sm text-muted-foreground">AURA · Thagai</span>
+            <span className="text-sm text-muted-foreground">Aura CRM</span>
           </header>
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4 md:p-6" id="main-scroll">
             {children}

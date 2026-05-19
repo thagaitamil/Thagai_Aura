@@ -21,7 +21,7 @@ export default function LoginPage({
     <div className="flex min-h-screen items-center justify-center bg-cream p-4">
       <Card className="w-full max-w-md border-burgundy/15 shadow-lg">
         <CardHeader className="space-y-1 text-center">
-          <CardTitle className="font-serif text-2xl text-primary">Thagai CRM</CardTitle>
+          <CardTitle className="font-serif text-2xl text-primary">Aura</CardTitle>
           <CardDescription className="text-muted-foreground">
             Team sign-in · internal use only
           </CardDescription>

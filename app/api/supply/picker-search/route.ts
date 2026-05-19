@@ -1,0 +1,67 @@
+import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
+import { NextRequest, NextResponse } from "next/server";
+import { getPublicSupabaseKey } from "@/lib/supabase/env-keys";
+import { parseSupplySearchToken } from "@/lib/display-ids";
+
+export async function GET(request: NextRequest) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  let publicKey: string;
+  try {
+    publicKey = getPublicSupabaseKey();
+  } catch {
+    return NextResponse.json({ rows: [] }, { status: 503 });
+  }
+  if (!url) return NextResponse.json({ rows: [] }, { status: 503 });
+
+  const cookieStore = cookies();
+  const supabase = createServerClient(url, publicKey, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) =>
+            cookieStore.set(name, value, options)
+          );
+        } catch {
+          /* ignore */
+        }
+      },
+    },
+  });
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const q = (request.nextUrl.searchParams.get("q") ?? "").trim();
+  if (q.length < 1) return NextResponse.json({ rows: [] });
+
+  const num = parseSupplySearchToken(q);
+
+  if (num != null) {
+    const { data } = await supabase
+      .from("supply_profiles")
+      .select("id, full_name, supply_number")
+      .is("deleted_at", null)
+      .eq("supply_number", num)
+      .limit(10);
+    if (data?.length) {
+      return NextResponse.json({ rows: data });
+    }
+  }
+
+  const pat = `%${q.replace(/[%_\\]/g, "")}%`;
+  const { data } = await supabase
+    .from("supply_profiles")
+    .select("id, full_name, supply_number")
+    .is("deleted_at", null)
+    .ilike("full_name", pat)
+    .order("full_name", { ascending: true })
+    .limit(20);
+
+  return NextResponse.json({ rows: data ?? [] });
+}

@@ -122,6 +122,15 @@ const config: Config = {
           "66%": { transform: "translate(-20px, 20px) scale(0.9)" },
           "100%": { transform: "translate(0px, 0px) scale(1)" },
         },
+        "nav-sweep": {
+          "0%": { transform: "translate3d(-100%,0,0)" },
+          "100%": { transform: "translate3d(calc(100vw + 80%),0,0)" },
+        },
+        "nav-flash": {
+          "0%": { transform: "scaleX(0)", opacity: "1" },
+          "40%": { transform: "scaleX(1)", opacity: "1" },
+          "100%": { transform: "scaleX(1)", opacity: "0" },
+        },
         float: {
           "0%, 100%": { transform: "translateY(0)" },
           "50%": { transform: "translateY(-20px)" },
@@ -135,6 +144,8 @@ const config: Config = {
         "spin-slow": "spin 20s linear infinite",
         blob: "blob 7s infinite",
         "pulse-slow": "pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+        "nav-sweep": "nav-sweep 0.95s ease-in-out infinite",
+        "nav-flash": "nav-flash 0.48s ease-out forwards",
       },
       animationDelay: {
         "2000": "2s",

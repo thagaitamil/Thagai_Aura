@@ -23,10 +23,10 @@ const siteUrl =
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: "Thagai CRM",
-    template: "%s · Thagai CRM",
+    default: "Aura",
+    template: "%s · Aura",
   },
-  description: "Internal CRM for Thagai operations.",
+  description: "Aura — internal operations CRM.",
   icons: {
     icon: "/favicon.ico",
   },

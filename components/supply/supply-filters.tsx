@@ -4,6 +4,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useCallback, useTransition } from "react";
 import { SlidersHorizontal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { signalAuraNavigationStart } from "@/lib/navigation-loading";
 
 const selectClass =
   "h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
@@ -24,6 +25,7 @@ export function SupplyFilters({ areas }: { areas: Area[] }) {
       if (value) params.set(key, value);
       else params.delete(key);
       startTransition(() => {
+        signalAuraNavigationStart();
         router.replace(`${pathname}?${params.toString()}`);
       });
     },
@@ -32,6 +34,7 @@ export function SupplyFilters({ areas }: { areas: Area[] }) {
 
   const clear = useCallback(() => {
     startTransition(() => {
+      signalAuraNavigationStart();
       router.replace(pathname);
     });
   }, [router, pathname]);

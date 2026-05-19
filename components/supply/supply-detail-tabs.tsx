@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
@@ -9,18 +9,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { DocumentUploadDialog, documentTypeLabel } from "@/components/shared/document-upload-dialog";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { Activity as ActivityIcon, FileText, ShieldAlert, UserCircle, Users } from "lucide-react";
+import { Activity as ActivityIcon, FileText, ShieldAlert, Upload, UserCircle, UserRoundCheck, Users } from "lucide-react";
 import {
   addSupplyActivity,
   addSupplyReference,
   addSupplyRisk,
-  updateReferenceVerification,
   resolveSupplyRisk,
   uploadSupplyDocument,
+  uploadSupplyReferenceDocument,
 } from "@/lib/actions/supply";
 import { getSignedCrmDocUrl } from "@/lib/actions/documents";
+import Link from "next/link";
+import { formatTrailId } from "@/lib/display-ids";
 
 type Activity = {
   id: string;
@@ -32,11 +35,28 @@ type Activity = {
 
 const NAV_ITEMS = [
   { value: "profile", label: "Profile", Icon: UserCircle },
+  { value: "assigned", label: "Assigned leads", Icon: UserRoundCheck },
   { value: "documents", label: "Documents", Icon: FileText },
   { value: "activity", label: "Activity", Icon: ActivityIcon },
   { value: "references", label: "References", Icon: Users },
   { value: "risk", label: "Risk", Icon: ShieldAlert },
 ] as const;
+
+const SUPPLY_DOCUMENT_TYPES = [
+  { value: "aadhaar", label: "Aadhaar card" },
+  { value: "smart_card", label: "Smart card" },
+  { value: "photo", label: "Profile photo" },
+  { value: "medical", label: "Medical certificate" },
+  { value: "other", label: "Other" },
+];
+
+const REFERENCE_DOCUMENT_TYPES = [
+  { value: "aadhaar", label: "Aadhaar card" },
+  { value: "smart_card", label: "Smart card" },
+  { value: "photo", label: "Photo" },
+  { value: "medical", label: "Medical" },
+  { value: "other", label: "Other" },
+];
 
 function refreshAfterMutation(router: ReturnType<typeof useRouter>) {
   startTransition(() => {
@@ -48,6 +68,8 @@ export function SupplyDetailTabs({
   supplyId,
   activities: activitiesProp,
   references: referencesProp,
+  referenceDocuments: referenceDocumentsProp,
+  assignedLeads,
   risks: risksProp,
   documents: documentsProp,
   profileForm,
@@ -55,26 +77,57 @@ export function SupplyDetailTabs({
   supplyId: string;
   activities: Activity[];
   references: Record<string, unknown>[];
+  referenceDocuments: Record<string, unknown>[];
+  assignedLeads: {
+    lead_id: string;
+    name: string;
+    phone: string;
+    status: string;
+    trail_number: number | null;
+    priority: number;
+    trial_status: string;
+  }[];
   risks: Record<string, unknown>[];
   documents: Record<string, unknown>[];
   profileForm: React.ReactNode;
 }) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<string>("profile");
+  const [tabStripBusy, setTabStripBusy] = useState(false);
   const [actType, setActType] = useState("note");
   const [actNotes, setActNotes] = useState("");
+  const [supplyDocType, setSupplyDocType] = useState("aadhaar");
+  const [supplyUploadOpen, setSupplyUploadOpen] = useState(false);
+  const [referenceUpload, setReferenceUpload] = useState<{
+    referenceId: string;
+    referenceName: string;
+    docType: string;
+  } | null>(null);
 
   // Optimistic lists — prepend new items immediately, router.refresh() syncs after
   const [activities, setActivities] = useState(activitiesProp);
   const [references, setReferences] = useState(referencesProp);
   const [risks, setRisks] = useState(risksProp);
   const [documents, setDocuments] = useState(documentsProp);
+  const [referenceDocuments, setReferenceDocuments] = useState(referenceDocumentsProp);
+  const hasAadhaar = documents.some((d) => d.doc_type === "aadhaar");
+  const hasSmartCard = documents.some((d) => d.doc_type === "smart_card");
 
   // Keep local lists in sync when parent props update (after router.refresh)
   useEffect(() => setActivities(activitiesProp), [activitiesProp]);
   useEffect(() => setReferences(referencesProp), [referencesProp]);
   useEffect(() => setRisks(risksProp), [risksProp]);
   useEffect(() => setDocuments(documentsProp), [documentsProp]);
+  useEffect(() => setReferenceDocuments(referenceDocumentsProp), [referenceDocumentsProp]);
+
+  const selectTab = useCallback((v: string) => {
+    setActiveTab((cur) => {
+      if (cur === v) return cur;
+      setTabStripBusy(true);
+      window.setTimeout(() => setTabStripBusy(false), 320);
+      return v;
+    });
+  }, []);
 
   async function submitActivity(e: React.FormEvent) {
     e.preventDefault();
@@ -114,7 +167,7 @@ export function SupplyDetailTabs({
             <button
               key={value}
               type="button"
-              onClick={() => setActiveTab(value)}
+              onClick={() => selectTab(value)}
               className={cn(
                 "flex items-center gap-2 shrink-0 rounded-lg px-3 py-2",
                 "text-sm font-medium justify-start w-auto md:w-full whitespace-nowrap",
@@ -132,80 +185,158 @@ export function SupplyDetailTabs({
       </div>
 
       {/* Main content — Tabs only manages show/hide */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 min-w-0">
+      <Tabs value={activeTab} onValueChange={selectTab} className="relative flex-1 min-w-0">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <TabsContent value="profile" className="mt-0 flex-1 min-h-0">
+        {tabStripBusy && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute left-0 right-0 top-0 z-30 h-1 overflow-hidden rounded-full bg-muted shadow-sm"
+          >
+            <div className="h-full w-full animate-pulse bg-accent shadow-[0_0_8px_hsl(var(--accent))]" />
+          </div>
+        )}
+        <TabsContent value="profile" className="mt-0 flex-1 min-h-0 space-y-4">
           {profileForm}
         </TabsContent>
 
+        <TabsContent value="assigned" className="mt-0 flex-1 min-h-0 space-y-4">
+          <Card className="w-full border-border/80 shadow-sm">
+            <CardHeader className="pb-2">
+              <CardTitle className="font-serif text-lg">Customers assigned to this supply</CardTitle>
+              <p className="text-xs text-muted-foreground font-normal">
+                Read-only. Assignments are made from the lead when it is converted.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              {assignedLeads.map((l) => (
+                <div
+                  key={l.lead_id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <Link
+                      href={`/leads/${l.lead_id}`}
+                      className="font-medium text-foreground hover:underline"
+                    >
+                      {l.name}
+                    </Link>
+                    <span className="text-muted-foreground"> · {l.phone}</span>
+                    <div className="mt-0.5 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      <span className="capitalize">{l.status.replace(/_/g, " ")}</span>
+                      {l.trail_number != null && (
+                        <span className="font-mono">Lead ID {formatTrailId(l.trail_number)}</span>
+                      )}
+                      <span>
+                        P{l.priority} · {l.trial_status.replace(/_/g, " ")}
+                      </span>
+                    </div>
+                  </div>
+                  <Link
+                    href={`/leads/${l.lead_id}`}
+                    className="shrink-0 text-xs text-primary hover:underline"
+                  >
+                    Open lead
+                  </Link>
+                </div>
+              ))}
+              {!assignedLeads.length && (
+                <p className="rounded-lg border border-dashed border-border/80 bg-muted/20 p-3 text-muted-foreground">
+                  No customers assigned yet.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="documents" className="mt-0 flex flex-1 flex-col gap-4">
+          <Card className="w-full border-border/80 shadow-sm">
+            <CardHeader className="pb-2">
+              <CardTitle className="font-serif text-lg">Verification requirement</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-2 text-sm sm:grid-cols-2">
+              <button
+                type="button"
+                className={cn("rounded-lg border px-3 py-2 text-left transition-colors hover:bg-muted", hasAadhaar ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700")}
+                onClick={() => {
+                  setSupplyDocType("aadhaar");
+                  setSupplyUploadOpen(true);
+                }}
+              >
+                Aadhaar card {hasAadhaar ? "uploaded" : "required"}
+              </button>
+              <button
+                type="button"
+                className={cn("rounded-lg border px-3 py-2 text-left transition-colors hover:bg-muted", hasSmartCard ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700")}
+                onClick={() => {
+                  setSupplyDocType("smart_card");
+                  setSupplyUploadOpen(true);
+                }}
+              >
+                Smart card {hasSmartCard ? "uploaded" : "required"}
+              </button>
+              <p className="text-xs text-muted-foreground sm:col-span-2">
+                When both files are present, the supply profile is auto-marked verified unless an admin has locked verification.
+              </p>
+            </CardContent>
+          </Card>
           <Card className="w-full border-border/80 shadow-sm">
             <CardHeader>
               <CardTitle className="font-serif text-lg">Upload document</CardTitle>
             </CardHeader>
             <CardContent>
-              <form
-                className="grid w-full gap-4 md:grid-cols-2"
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  const form = e.currentTarget;
-                  const fd = new FormData(form);
-                  const docType = String(fd.get("doc_type") || "");
-                  const fileInput = form.querySelector<HTMLInputElement>('input[type="file"]');
-                  const fileName = fileInput?.files?.[0]?.name ?? "";
-                  const r = await uploadSupplyDocument(fd);
-                  if (r.error) toast.error(r.error);
-                  else {
-                    toast.success("Uploaded");
-                    if (fileName) {
-                      setDocuments((prev) => [
-                        {
-                          id: crypto.randomUUID(),
-                          doc_type: docType,
-                          file_name: fileName,
-                          storage_path: "",
-                          created_at: new Date().toISOString(),
-                        },
-                        ...prev,
-                      ]);
-                    }
-                    form.reset();
-                    refreshAfterMutation(router);
-                  }
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-fit"
+                onClick={() => {
+                  setSupplyDocType("other");
+                  setSupplyUploadOpen(true);
                 }}
               >
-                <input type="hidden" name="supply_id" value={supplyId} />
-                <div className="space-y-2">
-                  <Label htmlFor="doc_type">Type</Label>
-                  <select
-                    id="doc_type"
-                    name="doc_type"
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  >
-                    <option value="aadhaar">Aadhaar</option>
-                    <option value="photo">Profile photo</option>
-                    <option value="medical">Medical certificate</option>
-                    <option value="smart_card">Smart card</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="file">File</Label>
-                  <Input id="file" name="file" type="file" required accept=".pdf,.jpg,.jpeg,.png" />
-                </div>
-                <Button type="submit" className="w-fit bg-accent text-accent-foreground md:col-span-2">
-                  Upload
-                </Button>
-              </form>
+                <Upload className="size-4" />
+                Upload another document
+              </Button>
             </CardContent>
           </Card>
+          <DocumentUploadDialog
+            title={`Upload ${documentTypeLabel(supplyDocType)}`}
+            description="Choose the file and upload it here. Aadhaar card plus Smart card will auto-verify this supply unless admin override is locked."
+            open={supplyUploadOpen}
+            onOpenChange={setSupplyUploadOpen}
+            docType={supplyDocType}
+            setDocType={setSupplyDocType}
+            options={SUPPLY_DOCUMENT_TYPES}
+            hiddenFields={{ supply_id: supplyId }}
+            onSubmit={async (fd, context) => {
+              const r = await uploadSupplyDocument(fd);
+              if (r.error) {
+                toast.error(r.error);
+                return false;
+              }
+              toast.success("Uploaded");
+              if (context.fileName) {
+                setDocuments((prev) => [
+                  {
+                    id: crypto.randomUUID(),
+                    doc_type: context.docType,
+                    file_name: context.fileName,
+                    storage_path: "",
+                    created_at: new Date().toISOString(),
+                  },
+                  ...prev,
+                ]);
+              }
+              refreshAfterMutation(router);
+              return true;
+            }}
+          />
           <div className="w-full flex-1 rounded-xl border border-border/80 bg-card p-4 shadow-sm md:p-6">
             <h3 className="mb-3 font-medium">Uploaded files</h3>
             <ul className="space-y-2 text-sm">
               {documents.map((d) => (
                 <li key={String(d.id)} className="flex flex-wrap items-center justify-between gap-2">
                   <span>
-                    {String(d.doc_type)} — {String(d.file_name)}
+                    {documentTypeLabel(String(d.doc_type))} — {String(d.file_name)}
                   </span>
                   <Button
                     type="button"
@@ -235,7 +366,7 @@ export function SupplyDetailTabs({
             <CardContent>
               <form onSubmit={submitActivity} className="grid w-full gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label>Type</Label>
+                  <Label required>Type</Label>
                   <select
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                     value={actType}
@@ -298,31 +429,39 @@ export function SupplyDetailTabs({
                   fd.set("supply_id", supplyId);
                   const refName = String(fd.get("ref_name") || "");
                   const relationship = String(fd.get("relationship") || "");
-                  const phone = String(fd.get("ref_phone") || "");
-                  const notes = String(fd.get("ref_notes") || "");
-                  const r = await addSupplyReference(fd);
-                  if (r.error) toast.error(r.error);
-                  else {
-                    toast.success("Reference added");
-                    setReferences((prev) => [
-                      {
-                        id: crypto.randomUUID(),
-                        ref_name: refName,
-                        relationship,
-                        phone,
-                        notes,
-                        created_at: new Date().toISOString(),
-                      },
-                      ...prev,
-                    ]);
-                    form.reset();
-                    refreshAfterMutation(router);
-                  }
+	                  const phone = String(fd.get("ref_phone") || "");
+	                  const notes = String(fd.get("ref_notes") || "");
+	                  const r = await addSupplyReference(fd);
+	                  if (r.error) toast.error(r.error);
+	                  else {
+	                    toast.success("Reference added");
+                      const refId = "id" in r ? r.id : crypto.randomUUID();
+                      const verificationStatus =
+                        "verificationStatus" in r ? r.verificationStatus : "pending";
+	                    setReferences((prev) => [
+	                      {
+	                        id: refId,
+	                        ref_name: refName,
+	                        relationship,
+	                        phone,
+	                        notes,
+                          verification_status: verificationStatus,
+	                        created_at: new Date().toISOString(),
+	                      },
+	                      ...prev,
+	                    ]);
+                      const uploadedDocs = "documents" in r ? r.documents ?? [] : [];
+                      if (uploadedDocs.length > 0) {
+                        setReferenceDocuments((prev) => [...uploadedDocs, ...prev]);
+                      }
+	                    form.reset();
+	                    refreshAfterMutation(router);
+	                  }
                 }}
               >
                 <input type="hidden" name="supply_id" value={supplyId} />
                 <div className="space-y-2">
-                  <Label htmlFor="ref_name">Name</Label>
+                  <Label htmlFor="ref_name" required>Name</Label>
                   <Input id="ref_name" name="ref_name" required />
                 </div>
                 <div className="space-y-2">
@@ -333,24 +472,22 @@ export function SupplyDetailTabs({
                   <Label htmlFor="ref_phone">Phone</Label>
                   <Input id="ref_phone" name="ref_phone" />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="ref_verification">Verification</Label>
-                  <select
-                    id="ref_verification"
-                    name="ref_verification"
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  >
-                    <option value="pending">Pending</option>
-                    <option value="verified">Verified</option>
-                    <option value="not_verified">Not verified</option>
-                  </select>
-                </div>
-                <div className="md:col-span-2 space-y-2">
-                  <Label htmlFor="ref_notes">Notes</Label>
-                  <Textarea id="ref_notes" name="ref_notes" rows={2} />
-                </div>
-                <Button type="submit" className="w-fit bg-accent text-accent-foreground">
-                  Save reference
+	                <div className="md:col-span-2 space-y-2">
+	                  <Label htmlFor="ref_notes">Notes</Label>
+	                  <Textarea id="ref_notes" name="ref_notes" rows={2} />
+	                </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="ref_aadhaar_file">Aadhaar document</Label>
+                    <Input id="ref_aadhaar_file" name="aadhaar_file" type="file" accept=".pdf,.jpg,.jpeg,.png" />
+                    <p className="text-xs text-muted-foreground">Optional now. Required for auto verification.</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="ref_smart_card_file">Smart card document</Label>
+                    <Input id="ref_smart_card_file" name="smart_card_file" type="file" accept=".pdf,.jpg,.jpeg,.png" />
+                    <p className="text-xs text-muted-foreground">Optional now. Required for auto verification.</p>
+                  </div>
+	                <Button type="submit" className="w-fit bg-accent text-accent-foreground">
+	                  Save reference
                 </Button>
               </form>
             </CardContent>
@@ -358,8 +495,12 @@ export function SupplyDetailTabs({
           <ul className="w-full flex-1 space-y-2 text-sm">
             {references.map((r) => {
               const vs = String(r.verification_status ?? "pending");
+              const refId = String(r.id);
+              const rdocs = referenceDocuments.filter((d) => String(d.reference_id) === refId);
+              const refHasAadhaar = rdocs.some((d) => d.doc_type === "aadhaar");
+              const refHasSmartCard = rdocs.some((d) => d.doc_type === "smart_card");
               return (
-                <li key={String(r.id)} className="rounded-lg border border-border/80 bg-card p-3 shadow-sm space-y-2">
+                <li key={refId} className="rounded-lg border border-border/80 bg-card p-3 shadow-sm space-y-3">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <strong>{String(r.ref_name)}</strong>
@@ -368,35 +509,100 @@ export function SupplyDetailTabs({
                       {r.notes ? <div className="mt-1 text-muted-foreground">{String(r.notes)}</div> : null}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <select
-                        className={`h-7 rounded border px-2 text-xs font-medium ${
+                      <span
+                        className={cn(
+                          "rounded border px-2 py-1 text-xs font-medium capitalize",
                           vs === "verified"
                             ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                            : vs === "not_verified"
-                            ? "border-red-300 bg-red-50 text-red-700"
                             : "border-amber-300 bg-amber-50 text-amber-700"
-                        }`}
-                        value={vs}
-                        onChange={async (e) => {
-                          const val = e.target.value as "verified" | "pending" | "not_verified";
-                          const res = await updateReferenceVerification(String(r.id), supplyId, val);
-                          if (res.error) toast.error(res.error);
-                          else {
-                            toast.success("Verification updated");
-                            setReferences((prev) =>
-                              prev.map((ref) =>
-                                ref.id === r.id ? { ...ref, verification_status: val } : ref
-                              )
-                            );
-                            refreshAfterMutation(router);
-                          }
+                        )}
+                      >
+                        {vs.replace(/_/g, " ")}
+                      </span>
+                    </div>
+                  </div>
+	                  <div className="border-t border-border/60 pt-3 space-y-2">
+	                    <p className="text-xs font-medium text-muted-foreground">Documents for this reference</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        className={cn(
+                          "rounded-lg border px-3 py-2 text-left text-xs transition-colors hover:bg-muted",
+                          refHasAadhaar
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-amber-200 bg-amber-50 text-amber-700"
+                        )}
+                        onClick={() => {
+                          setReferenceUpload({
+                            referenceId: refId,
+                            referenceName: String(r.ref_name ?? "reference"),
+                            docType: "aadhaar",
+                          });
                         }}
                       >
-                        <option value="verified">Verified</option>
-                        <option value="pending">Pending</option>
-                        <option value="not_verified">Not verified</option>
-                      </select>
+                        Aadhaar card {refHasAadhaar ? "uploaded" : "required"}
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(
+                          "rounded-lg border px-3 py-2 text-left text-xs transition-colors hover:bg-muted",
+                          refHasSmartCard
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-amber-200 bg-amber-50 text-amber-700"
+                        )}
+                        onClick={() => {
+                          setReferenceUpload({
+                            referenceId: refId,
+                            referenceName: String(r.ref_name ?? "reference"),
+                            docType: "smart_card",
+                          });
+                        }}
+                      >
+                        Smart card {refHasSmartCard ? "uploaded" : "required"}
+                      </button>
                     </div>
+	                    <ul className="space-y-1">
+                      {rdocs.map((d) => (
+                        <li key={String(d.id)} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <span>
+                            {documentTypeLabel(String(d.doc_type))} — {String(d.file_name)}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={async () => {
+                              const path = String(d.storage_path);
+                              const res = await getSignedCrmDocUrl(path);
+                              if ("error" in res && res.error) toast.error(res.error);
+                              else if ("url" in res && res.url) window.open(res.url, "_blank");
+                            }}
+                          >
+                            Open
+                          </Button>
+                        </li>
+                      ))}
+                      {!rdocs.length && (
+                        <li className="text-xs text-muted-foreground">No files uploaded yet.</li>
+                      )}
+                    </ul>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      className="w-fit"
+                      onClick={() =>
+                        setReferenceUpload({
+                          referenceId: refId,
+                          referenceName: String(r.ref_name ?? "reference"),
+                          docType: "other",
+                        })
+                      }
+                    >
+                      <Upload className="size-4" />
+                      Upload to this reference
+                    </Button>
                   </div>
                 </li>
               );
@@ -407,6 +613,56 @@ export function SupplyDetailTabs({
               </li>
             )}
           </ul>
+          <DocumentUploadDialog
+            title={
+              referenceUpload
+                ? `Upload ${documentTypeLabel(referenceUpload.docType)}`
+                : "Upload reference document"
+            }
+            description={
+              referenceUpload
+                ? `Add this file for ${referenceUpload.referenceName}. Aadhaar card plus Smart card will auto-verify the reference.`
+                : undefined
+            }
+            open={!!referenceUpload}
+            onOpenChange={(open) => {
+              if (!open) setReferenceUpload(null);
+            }}
+            docType={referenceUpload?.docType ?? "aadhaar"}
+            setDocType={(docType) =>
+              setReferenceUpload((current) => current ? { ...current, docType } : current)
+            }
+            options={REFERENCE_DOCUMENT_TYPES}
+            hiddenFields={{
+              reference_id: referenceUpload?.referenceId ?? "",
+              supply_id: supplyId,
+            }}
+            onSubmit={async (fd) => {
+              const up = await uploadSupplyReferenceDocument(fd);
+              if (up.error) {
+                toast.error(up.error);
+                return false;
+              }
+              toast.success("Uploaded");
+              if ("document" in up && up.document) {
+                setReferenceDocuments((prev) => [
+                  up.document as Record<string, unknown>,
+                  ...prev,
+                ]);
+              }
+              if ("verificationStatus" in up && referenceUpload?.referenceId) {
+                setReferences((prev) =>
+                  prev.map((ref) =>
+                    String(ref.id) === referenceUpload.referenceId
+                      ? { ...ref, verification_status: up.verificationStatus }
+                      : ref
+                  )
+                );
+              }
+              refreshAfterMutation(router);
+              return true;
+            }}
+          />
         </TabsContent>
 
         <TabsContent value="risk" className="mt-0 flex flex-1 flex-col gap-4">
@@ -443,7 +699,7 @@ export function SupplyDetailTabs({
                 }}
               >
                 <div className="space-y-2 md:col-span-2">
-                  <Label htmlFor="category">Category</Label>
+                  <Label htmlFor="category" required>Category</Label>
                   <select
                     id="category"
                     name="category"

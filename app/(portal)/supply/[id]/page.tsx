@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, UserCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getSignedCrmDocUrl } from "@/lib/actions/documents";
+import { formatSupplyDisplayId } from "@/lib/display-ids";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +60,57 @@ export default async function SupplyDetailPage({
     .eq("supply_id", id)
     .order("created_at", { ascending: false });
 
+  const refIds = (refs ?? []).map((r) => r.id as string).filter(Boolean);
+  const { data: refDocs } =
+    refIds.length > 0
+      ? await supabase
+          .from("supply_reference_documents")
+          .select("*")
+          .in("reference_id", refIds)
+          .order("created_at", { ascending: false })
+      : { data: [] as Record<string, unknown>[] };
+
+  const { data: mappingRows } = await supabase
+    .from("supply_mapping")
+    .select("lead_id, priority, trial_status, leads(id, name, phone, status, trail_number)")
+    .eq("supply_id", id)
+    .order("priority", { ascending: true });
+
+  type AssignedLead = {
+    lead_id: string;
+    name: string;
+    phone: string;
+    status: string;
+    trail_number: number | null;
+    priority: number;
+    trial_status: string;
+  };
+  const assignedLeads: AssignedLead[] = [];
+  const seenLead = new Set<string>();
+  for (const m of mappingRows ?? []) {
+    const lid = m.lead_id as string;
+    if (!lid || seenLead.has(lid)) continue;
+    const raw = m.leads;
+    const L = (Array.isArray(raw) ? raw[0] : raw) as {
+      id: string;
+      name: string;
+      phone: string;
+      status: string;
+      trail_number: number | null;
+    } | null;
+    if (!L?.id) continue;
+    seenLead.add(lid);
+    assignedLeads.push({
+      lead_id: L.id,
+      name: L.name,
+      phone: L.phone,
+      status: L.status,
+      trail_number: L.trail_number ?? null,
+      priority: m.priority as number,
+      trial_status: String(m.trial_status ?? ""),
+    });
+  }
+
   const { data: docs } = await supabase
     .from("supply_documents")
     .select("*")
@@ -90,6 +142,7 @@ export default async function SupplyDetailPage({
           verificationStatus={row.verification_status as string}
           unresolvedRisks={unresolvedRisks}
           photoUrl={photoUrl}
+          supplyNumber={row.supply_number as number | null | undefined}
         />
         <p className="text-sm text-muted-foreground">Viewer access — contact admin for edits.</p>
       </div>
@@ -114,14 +167,24 @@ export default async function SupplyDetailPage({
         photoUrl={photoUrl}
         supplyId={id}
         canUploadPhoto
+        supplyNumber={row.supply_number as number | null | undefined}
       />
       <SupplyDetailTabs
         supplyId={id}
         activities={activities ?? []}
         references={refs ?? []}
+        referenceDocuments={refDocs ?? []}
+        assignedLeads={assignedLeads}
         risks={risks ?? []}
         documents={docs ?? []}
-        profileForm={<SupplyForm mode="edit" areas={areas ?? []} initial={initial} />}
+        profileForm={
+          <SupplyForm
+            mode="edit"
+            areas={areas ?? []}
+            initial={initial}
+            isAdmin={profile?.role === "admin"}
+          />
+        }
       />
     </div>
   );
@@ -129,12 +192,13 @@ export default async function SupplyDetailPage({
 
 function SupplyProfileHeader({
   name, phone, type, status, isBlacklisted, verificationStatus, unresolvedRisks, photoUrl,
-  supplyId, canUploadPhoto,
+  supplyId, canUploadPhoto, supplyNumber,
 }: {
   name: string; phone: string; type: string; status: string;
   isBlacklisted: boolean; verificationStatus: string;
   unresolvedRisks: number; photoUrl: string | null;
   supplyId?: string; canUploadPhoto?: boolean;
+  supplyNumber?: number | null;
 }) {
   return (
     <div className="flex items-start gap-4">
@@ -171,6 +235,11 @@ function SupplyProfileHeader({
           Supply profile · {phone}
         </p>
         <div className="flex flex-wrap gap-2">
+          {supplyNumber != null && (
+            <Badge variant="secondary" className="font-mono text-xs">
+              {formatSupplyDisplayId(supplyNumber)}
+            </Badge>
+          )}
           <Badge variant="outline" className="capitalize">{type}</Badge>
           <Badge
             variant={status === "available" ? "default" : "secondary"}
