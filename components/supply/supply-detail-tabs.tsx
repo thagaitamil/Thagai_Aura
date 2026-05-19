@@ -1,7 +1,6 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useState } from "react";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,6 +23,7 @@ import {
 import { getSignedCrmDocUrl } from "@/lib/actions/documents";
 import Link from "next/link";
 import { formatTrailId } from "@/lib/display-ids";
+import { useCachedJson } from "@/lib/client-cache";
 
 type Activity = {
   id: string;
@@ -58,42 +58,28 @@ const REFERENCE_DOCUMENT_TYPES = [
   { value: "other", label: "Other" },
 ];
 
-function refreshAfterMutation(router: ReturnType<typeof useRouter>) {
-  startTransition(() => {
-    router.refresh();
-  });
-}
+type AssignedLead = {
+  lead_id: string;
+  name: string;
+  phone: string;
+  status: string;
+  trail_number: number | null;
+  priority: number;
+  trial_status: string;
+};
 
 export function SupplyDetailTabs({
   supplyId,
-  activities: activitiesProp,
-  references: referencesProp,
-  referenceDocuments: referenceDocumentsProp,
-  assignedLeads,
-  risks: risksProp,
-  documents: documentsProp,
+  initialDocuments,
+  initialRisks,
   profileForm,
 }: {
   supplyId: string;
-  activities: Activity[];
-  references: Record<string, unknown>[];
-  referenceDocuments: Record<string, unknown>[];
-  assignedLeads: {
-    lead_id: string;
-    name: string;
-    phone: string;
-    status: string;
-    trail_number: number | null;
-    priority: number;
-    trial_status: string;
-  }[];
-  risks: Record<string, unknown>[];
-  documents: Record<string, unknown>[];
+  initialDocuments: Record<string, unknown>[];
+  initialRisks: Record<string, unknown>[];
   profileForm: React.ReactNode;
 }) {
-  const router = useRouter();
   const [activeTab, setActiveTab] = useState<string>("profile");
-  const [tabStripBusy, setTabStripBusy] = useState(false);
   const [actType, setActType] = useState("note");
   const [actNotes, setActNotes] = useState("");
   const [supplyDocType, setSupplyDocType] = useState("aadhaar");
@@ -104,29 +90,46 @@ export function SupplyDetailTabs({
     docType: string;
   } | null>(null);
 
-  // Optimistic lists — prepend new items immediately, router.refresh() syncs after
-  const [activities, setActivities] = useState(activitiesProp);
-  const [references, setReferences] = useState(referencesProp);
-  const [risks, setRisks] = useState(risksProp);
-  const [documents, setDocuments] = useState(documentsProp);
-  const [referenceDocuments, setReferenceDocuments] = useState(referenceDocumentsProp);
+  const assignedQuery = useCachedJson<{ assignedLeads: AssignedLead[] }>(
+    `supply:${supplyId}:assigned`,
+    `/api/supply/${supplyId}/assigned-leads`,
+    { enabled: activeTab === "assigned", initialData: { assignedLeads: [] } },
+  );
+  const documentsQuery = useCachedJson<{ documents: Record<string, unknown>[] }>(
+    `supply:${supplyId}:documents`,
+    `/api/supply/${supplyId}/documents`,
+    { enabled: activeTab === "documents", initialData: { documents: initialDocuments } },
+  );
+  const activitiesQuery = useCachedJson<{ activities: Activity[] }>(
+    `supply:${supplyId}:activities`,
+    `/api/supply/${supplyId}/activities`,
+    { enabled: activeTab === "activity", initialData: { activities: [] } },
+  );
+  const referencesQuery = useCachedJson<{
+    references: Record<string, unknown>[];
+    referenceDocuments: Record<string, unknown>[];
+  }>(
+    `supply:${supplyId}:references`,
+    `/api/supply/${supplyId}/references`,
+    { enabled: activeTab === "references", initialData: { references: [], referenceDocuments: [] } },
+  );
+  const risksQuery = useCachedJson<{ risks: Record<string, unknown>[] }>(
+    `supply:${supplyId}:risks`,
+    `/api/supply/${supplyId}/risks`,
+    { enabled: activeTab === "risk", initialData: { risks: initialRisks } },
+  );
+
+  const assignedLeads = assignedQuery.data.assignedLeads;
+  const documents = documentsQuery.data.documents;
+  const activities = activitiesQuery.data.activities;
+  const references = referencesQuery.data.references;
+  const referenceDocuments = referencesQuery.data.referenceDocuments;
+  const risks = risksQuery.data.risks;
   const hasAadhaar = documents.some((d) => d.doc_type === "aadhaar");
   const hasSmartCard = documents.some((d) => d.doc_type === "smart_card");
 
-  // Keep local lists in sync when parent props update (after router.refresh)
-  useEffect(() => setActivities(activitiesProp), [activitiesProp]);
-  useEffect(() => setReferences(referencesProp), [referencesProp]);
-  useEffect(() => setRisks(risksProp), [risksProp]);
-  useEffect(() => setDocuments(documentsProp), [documentsProp]);
-  useEffect(() => setReferenceDocuments(referenceDocumentsProp), [referenceDocumentsProp]);
-
   const selectTab = useCallback((v: string) => {
-    setActiveTab((cur) => {
-      if (cur === v) return cur;
-      setTabStripBusy(true);
-      window.setTimeout(() => setTabStripBusy(false), 320);
-      return v;
-    });
+    setActiveTab(v);
   }, []);
 
   async function submitActivity(e: React.FormEvent) {
@@ -136,18 +139,20 @@ export function SupplyDetailTabs({
     else {
       toast.success("Activity logged");
       // Show immediately
-      setActivities((prev) => [
-        {
-          id: crypto.randomUUID(),
-          activity_type: actType,
-          notes: actNotes || null,
-          created_at: new Date().toISOString(),
-          created_by: null,
-        },
-        ...prev,
-      ]);
+      activitiesQuery.setData((prev) => ({
+        activities: [
+          {
+            id: crypto.randomUUID(),
+            activity_type: actType,
+            notes: actNotes || null,
+            created_at: new Date().toISOString(),
+            created_by: null,
+          },
+          ...prev.activities,
+        ],
+      }));
       setActNotes("");
-      refreshAfterMutation(router);
+      void activitiesQuery.reload();
     }
   }
 
@@ -187,14 +192,6 @@ export function SupplyDetailTabs({
       {/* Main content — Tabs only manages show/hide */}
       <Tabs value={activeTab} onValueChange={selectTab} className="relative flex-1 min-w-0">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {tabStripBusy && (
-          <div
-            aria-hidden
-            className="pointer-events-none absolute left-0 right-0 top-0 z-30 h-1 overflow-hidden rounded-full bg-muted shadow-sm"
-          >
-            <div className="h-full w-full animate-pulse bg-accent shadow-[0_0_8px_hsl(var(--accent))]" />
-          </div>
-        )}
         <TabsContent value="profile" className="mt-0 flex-1 min-h-0 space-y-4">
           {profileForm}
         </TabsContent>
@@ -315,18 +312,20 @@ export function SupplyDetailTabs({
               }
               toast.success("Uploaded");
               if (context.fileName) {
-                setDocuments((prev) => [
-                  {
-                    id: crypto.randomUUID(),
-                    doc_type: context.docType,
-                    file_name: context.fileName,
-                    storage_path: "",
-                    created_at: new Date().toISOString(),
-                  },
-                  ...prev,
-                ]);
+                documentsQuery.setData((prev) => ({
+                  documents: [
+                    {
+                      id: crypto.randomUUID(),
+                      doc_type: context.docType,
+                      file_name: context.fileName,
+                      storage_path: "",
+                      created_at: new Date().toISOString(),
+                    },
+                    ...prev.documents,
+                  ],
+                }));
               }
-              refreshAfterMutation(router);
+              void documentsQuery.reload();
               return true;
             }}
           />
@@ -438,24 +437,30 @@ export function SupplyDetailTabs({
                       const refId = "id" in r ? r.id : crypto.randomUUID();
                       const verificationStatus =
                         "verificationStatus" in r ? r.verificationStatus : "pending";
-	                    setReferences((prev) => [
-	                      {
-	                        id: refId,
-	                        ref_name: refName,
-	                        relationship,
-	                        phone,
-	                        notes,
-                          verification_status: verificationStatus,
-	                        created_at: new Date().toISOString(),
-	                      },
-	                      ...prev,
-	                    ]);
-                      const uploadedDocs = "documents" in r ? r.documents ?? [] : [];
-                      if (uploadedDocs.length > 0) {
-                        setReferenceDocuments((prev) => [...uploadedDocs, ...prev]);
-                      }
-	                    form.reset();
-	                    refreshAfterMutation(router);
+		                    referencesQuery.setData((prev) => ({
+                          references: [
+                            {
+                              id: refId,
+                              ref_name: refName,
+                              relationship,
+                              phone,
+                              notes,
+                              verification_status: verificationStatus,
+                              created_at: new Date().toISOString(),
+                            },
+                            ...prev.references,
+                          ],
+                          referenceDocuments: prev.referenceDocuments,
+                        }));
+	                      const uploadedDocs = "documents" in r ? r.documents ?? [] : [];
+	                      if (uploadedDocs.length > 0) {
+	                        referencesQuery.setData((prev) => ({
+                            references: prev.references,
+                            referenceDocuments: [...uploadedDocs, ...prev.referenceDocuments],
+                          }));
+	                      }
+		                    form.reset();
+		                    void referencesQuery.reload();
 	                  }
                 }}
               >
@@ -645,21 +650,25 @@ export function SupplyDetailTabs({
               }
               toast.success("Uploaded");
               if ("document" in up && up.document) {
-                setReferenceDocuments((prev) => [
-                  up.document as Record<string, unknown>,
-                  ...prev,
-                ]);
+                referencesQuery.setData((prev) => ({
+                  references: prev.references,
+                  referenceDocuments: [
+                    up.document as Record<string, unknown>,
+                    ...prev.referenceDocuments,
+                  ],
+                }));
               }
               if ("verificationStatus" in up && referenceUpload?.referenceId) {
-                setReferences((prev) =>
-                  prev.map((ref) =>
+                referencesQuery.setData((prev) => ({
+                  referenceDocuments: prev.referenceDocuments,
+                  references: prev.references.map((ref) =>
                     String(ref.id) === referenceUpload.referenceId
                       ? { ...ref, verification_status: up.verificationStatus }
                       : ref
-                  )
-                );
+                  ),
+                }));
               }
-              refreshAfterMutation(router);
+              void referencesQuery.reload();
               return true;
             }}
           />
@@ -684,17 +693,19 @@ export function SupplyDetailTabs({
                   if (r.error) toast.error(r.error);
                   else {
                     toast.success("Risk flag recorded");
-                    setRisks((prev) => [
-                      {
-                        id: crypto.randomUUID(),
-                        category,
-                        notes,
-                        created_at: new Date().toISOString(),
-                      },
-                      ...prev,
-                    ]);
+                    risksQuery.setData((prev) => ({
+                      risks: [
+                        {
+                          id: crypto.randomUUID(),
+                          category,
+                          notes,
+                          created_at: new Date().toISOString(),
+                        },
+                        ...prev.risks,
+                      ],
+                    }));
                     form.reset();
-                    refreshAfterMutation(router);
+                    void risksQuery.reload();
                   }
                 }}
               >
@@ -748,12 +759,12 @@ export function SupplyDetailTabs({
                           if (res.error) toast.error(res.error);
                           else {
                             toast.success("Risk resolved");
-                            setRisks((prev) =>
-                              prev.map((risk) =>
+                            risksQuery.setData((prev) => ({
+                              risks: prev.risks.map((risk) =>
                                 risk.id === r.id ? { ...risk, resolved_at: new Date().toISOString() } : risk
-                              )
-                            );
-                            refreshAfterMutation(router);
+                              ),
+                            }));
+                            void risksQuery.reload();
                           }
                         }}
                       >

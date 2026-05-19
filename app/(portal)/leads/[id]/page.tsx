@@ -3,11 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getSessionProfile, canWriteLeads } from "@/lib/auth/session";
 import { LeadForm } from "@/components/leads/lead-form";
 import { formatSupplyDisplayId } from "@/lib/display-ids";
-import {
-  LeadDetailTabs,
-  type LeadFollowUpRow,
-  type LeadSupplyMappingRow,
-} from "@/components/leads/lead-detail-tabs";
+import { LeadDetailTabs, type LeadSupplyMappingRow } from "@/components/leads/lead-detail-tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -51,38 +47,11 @@ export default async function LeadDetailPage({
     .eq("lead_id", id)
     .maybeSingle();
 
-  const { data: activities } = await supabase
-    .from("lead_activities")
-    .select("*")
-    .eq("lead_id", id)
-    .order("created_at", { ascending: false })
-    .limit(50);
-
   const { data: mappings } = await supabase
     .from("supply_mapping")
     .select("*, supply_profiles(full_name, status, type, supply_number)")
     .eq("lead_id", id)
     .order("priority", { ascending: true });
-
-  const { data: docs } = await supabase
-    .from("lead_documents")
-    .select("*")
-    .eq("lead_id", id)
-    .order("created_at", { ascending: false });
-
-  const { data: followUps } = await supabase
-    .from("lead_follow_ups")
-    .select("id, due_at, notes, outcome, completed_at, created_at")
-    .eq("lead_id", id)
-    .order("created_at", { ascending: false })
-    .limit(100);
-
-  const { data: supplies } = await supabase
-    .from("supply_profiles")
-    .select("id, full_name, type, status")
-    .is("deleted_at", null)
-    .order("full_name", { ascending: true })
-    .limit(500);
 
   const canWrite = profile && canWriteLeads(profile.role);
   const initial = {
@@ -126,11 +95,7 @@ export default async function LeadDetailPage({
       </div>
       <LeadDetailTabs
         leadId={id}
-        activities={activities ?? []}
-        followUps={(followUps ?? []) as LeadFollowUpRow[]}
-        mappings={(mappings ?? []) as LeadSupplyMappingRow[]}
-        supplies={supplies ?? []}
-        documents={docs ?? []}
+        initialMappings={(mappings ?? []) as LeadSupplyMappingRow[]}
         profileForm={
           <LeadForm
             mode="edit"

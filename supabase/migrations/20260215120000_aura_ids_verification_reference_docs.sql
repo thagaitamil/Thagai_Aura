@@ -22,7 +22,8 @@ WHERE public.leads.id = sub.id AND public.leads.trail_number IS NULL;
 
 SELECT setval(
   'public.lead_trail_number_seq',
-  COALESCE((SELECT MAX(trail_number) FROM public.leads), 0)
+  GREATEST(COALESCE((SELECT MAX(trail_number) FROM public.leads), 1), 1),
+  COALESCE((SELECT MAX(trail_number) FROM public.leads), 0) > 0
 );
 
 CREATE OR REPLACE FUNCTION public.assign_lead_trail_number()
@@ -56,7 +57,8 @@ WHERE public.supply_profiles.id = sub.id AND public.supply_profiles.supply_numbe
 
 SELECT setval(
   'public.supply_display_number_seq',
-  COALESCE((SELECT MAX(supply_number) FROM public.supply_profiles), 0)
+  GREATEST(COALESCE((SELECT MAX(supply_number) FROM public.supply_profiles), 1), 1),
+  COALESCE((SELECT MAX(supply_number) FROM public.supply_profiles), 0) > 0
 );
 
 CREATE OR REPLACE FUNCTION public.assign_supply_display_number()

@@ -92,6 +92,7 @@ const migrations = [
   resolve(root, "supabase/migrations/20260114100001_storage_crm_docs.sql"),
   resolve(root, "supabase/migrations/20260215120000_aura_ids_verification_reference_docs.sql"),
   resolve(root, "supabase/migrations/20260215123000_lead_service_dates.sql"),
+  resolve(root, "supabase/migrations/20260215124500_performance_indexes.sql"),
 ];
 
 function relationExists(name) {

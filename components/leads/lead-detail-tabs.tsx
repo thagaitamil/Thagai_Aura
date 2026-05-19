@@ -19,8 +19,7 @@ import {
   Users,
 } from "lucide-react";
 import { format } from "date-fns";
-import { useRouter } from "next/navigation";
-import { startTransition, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -34,6 +33,7 @@ import {
 } from "@/lib/actions/leads";
 import { getSignedCrmDocUrl } from "@/lib/actions/documents";
 import { formatSupplyDisplayId } from "@/lib/display-ids";
+import { useCachedJson } from "@/lib/client-cache";
 
 export type LeadSupplyMappingRow = {
   id: string;
@@ -79,47 +79,56 @@ const LEAD_DOCUMENT_TYPES = [
 
 export function LeadDetailTabs({
   leadId,
-  activities: activitiesProp,
-  followUps: followUpsProp,
-  mappings,
-  supplies,
-  documents: documentsProp,
+  initialMappings,
   profileForm,
 }: {
   leadId: string;
-  activities: Record<string, unknown>[];
-  followUps: LeadFollowUpRow[];
-  mappings: LeadSupplyMappingRow[];
-  supplies: { id: string; full_name: string; type: string; status: string }[];
-  documents: Record<string, unknown>[];
+  initialMappings: LeadSupplyMappingRow[];
   profileForm: React.ReactNode;
 }) {
-  const router = useRouter();
   const [activeTab, setActiveTab] = useState<string>("profile");
-  const [tabStripBusy, setTabStripBusy] = useState(false);
   const [actType, setActType] = useState("note");
   const [actNotes, setActNotes] = useState("");
   const [leadDocType, setLeadDocType] = useState("aadhaar");
   const [leadUploadOpen, setLeadUploadOpen] = useState(false);
 
-  // Optimistic lists
-  const [activities, setActivities] = useState(activitiesProp);
-  const [followUps, setFollowUps] = useState(followUpsProp);
-  const [documents, setDocuments] = useState(documentsProp);
+  const activitiesQuery = useCachedJson<{ activities: Record<string, unknown>[] }>(
+    `lead:${leadId}:activities`,
+    `/api/leads/${leadId}/activities`,
+    { enabled: activeTab === "conversation", initialData: { activities: [] } },
+  );
+  const followUpsQuery = useCachedJson<{ followUps: LeadFollowUpRow[] }>(
+    `lead:${leadId}:followups`,
+    `/api/leads/${leadId}/followups`,
+    { enabled: activeTab === "followups", initialData: { followUps: [] } },
+  );
+  const documentsQuery = useCachedJson<{ documents: Record<string, unknown>[] }>(
+    `lead:${leadId}:documents`,
+    `/api/leads/${leadId}/documents`,
+    { enabled: activeTab === "documents", initialData: { documents: [] } },
+  );
+  const mappingsQuery = useCachedJson<{
+    mappings: LeadSupplyMappingRow[];
+    supplies: { id: string; full_name: string; type: string; status: string }[];
+  }>(
+    `lead:${leadId}:mappings`,
+    `/api/leads/${leadId}/mappings`,
+    {
+      enabled: activeTab === "assigned" || activeTab === "mapping",
+      initialData: { mappings: initialMappings, supplies: [] },
+    },
+  );
+
+  const activities = activitiesQuery.data.activities;
+  const followUps = followUpsQuery.data.followUps;
+  const documents = documentsQuery.data.documents;
+  const mappings = mappingsQuery.data.mappings;
+  const supplies = mappingsQuery.data.supplies;
   const hasAadhaar = documents.some((d) => d.doc_type === "aadhaar");
   const hasSmartCard = documents.some((d) => d.doc_type === "smart_card");
 
-  useEffect(() => setActivities(activitiesProp), [activitiesProp]);
-  useEffect(() => setFollowUps(followUpsProp), [followUpsProp]);
-  useEffect(() => setDocuments(documentsProp), [documentsProp]);
-
   const selectTab = useCallback((v: string) => {
-    setActiveTab((cur) => {
-      if (cur === v) return cur;
-      setTabStripBusy(true);
-      window.setTimeout(() => setTabStripBusy(false), 320);
-      return v;
-    });
+    setActiveTab(v);
   }, []);
 
   const p1 = mappings.find((m) => m.priority === 1)?.supply_id ?? "";
@@ -134,10 +143,6 @@ export function LeadDetailTabs({
     setM1(p1); setM2(p2); setM3(p3);
   }, [p1, p2, p3]);
 
-  function syncRefresh() {
-    startTransition(() => { router.refresh(); });
-  }
-
   const primaryMapping = mappings.find((m) => m.priority === 1);
 
   async function submitActivity(e: React.FormEvent) {
@@ -146,17 +151,18 @@ export function LeadDetailTabs({
     if (r.error) toast.error(r.error);
     else {
       toast.success("Logged");
-      setActivities((prev) => [
+      activitiesQuery.setData((prev) => ({
+        activities: [
         {
           id: crypto.randomUUID(),
           activity_type: actType,
           notes: actNotes || null,
           created_at: new Date().toISOString(),
         },
-        ...prev,
-      ]);
+        ...prev.activities,
+      ]}));
       setActNotes("");
-      syncRefresh();
+      void activitiesQuery.reload();
     }
   }
 
@@ -171,7 +177,7 @@ export function LeadDetailTabs({
     if (r.error) toast.error(r.error);
     else {
       toast.success("Mapping saved");
-      syncRefresh();
+      void mappingsQuery.reload();
     }
   }
 
@@ -211,15 +217,6 @@ export function LeadDetailTabs({
       {/* ── Content panels ──────────────────────────────────────── */}
       <Tabs value={activeTab} onValueChange={selectTab} className="relative flex-1 min-w-0">
       <div className="flex-1 min-w-0">
-        {tabStripBusy && (
-          <div
-            aria-hidden
-            className="pointer-events-none absolute left-0 right-0 top-0 z-30 h-1 overflow-hidden rounded-full bg-muted shadow-sm"
-          >
-            <div className="h-full w-full animate-pulse bg-accent shadow-[0_0_8px_hsl(var(--accent))]" />
-          </div>
-        )}
-
         {/* Lead profile */}
         <TabsContent value="profile" className="mt-0">
           {profileForm}
@@ -287,19 +284,21 @@ export function LeadDetailTabs({
                   if (r.error) toast.error(r.error);
                   else {
                     toast.success("Follow-up scheduled");
-                    setFollowUps((prev) => [
-                      {
-                        id: crypto.randomUUID(),
-                        due_at: dueAt ? new Date(dueAt).toISOString() : new Date().toISOString(),
-                        notes: notes || null,
-                        outcome: "pending",
-                        completed_at: null,
-                        created_at: new Date().toISOString(),
-                      },
-                      ...prev,
-                    ]);
+                    followUpsQuery.setData((prev) => ({
+                      followUps: [
+                        {
+                          id: crypto.randomUUID(),
+                          due_at: dueAt ? new Date(dueAt).toISOString() : new Date().toISOString(),
+                          notes: notes || null,
+                          outcome: "pending",
+                          completed_at: null,
+                          created_at: new Date().toISOString(),
+                        },
+                        ...prev.followUps,
+                      ],
+                    }));
                     form.reset();
-                    syncRefresh();
+                    void followUpsQuery.reload();
                   }
                 }}
               >
@@ -358,10 +357,10 @@ export function LeadDetailTabs({
                               if (r.error) toast.error(r.error);
                               else {
                                 toast.success(`Marked ${outcome}`);
-                                setFollowUps((prev) =>
-                                  prev.map((f) => f.id === fu.id ? { ...f, outcome } : f)
-                                );
-                                syncRefresh();
+                                followUpsQuery.setData((prev) => ({
+                                  followUps: prev.followUps.map((f) => f.id === fu.id ? { ...f, outcome } : f),
+                                }));
+                                void followUpsQuery.reload();
                               }
                             }}
                           >
@@ -376,10 +375,12 @@ export function LeadDetailTabs({
                             if (r.error) toast.error(r.error);
                             else {
                               toast.success("Cancelled");
-                              setFollowUps((prev) =>
-                                prev.map((f) => f.id === fu.id ? { ...f, outcome: "cancelled" } : f)
-                              );
-                              syncRefresh();
+                              followUpsQuery.setData((prev) => ({
+                                followUps: prev.followUps.map((f) =>
+                                  f.id === fu.id ? { ...f, outcome: "cancelled" } : f
+                                ),
+                              }));
+                              void followUpsQuery.reload();
                             }
                           }}
                         >
@@ -517,7 +518,7 @@ export function LeadDetailTabs({
                     onChange={async (e) => {
                       const r = await updateMappingTrial(m.id, leadId, e.target.value);
                       if (r.error) toast.error(r.error);
-                      else { toast.success("Updated"); syncRefresh(); }
+                      else { toast.success("Updated"); void mappingsQuery.reload(); }
                     }}
                   >
                     <option value="suggested">Suggested</option>
@@ -534,7 +535,7 @@ export function LeadDetailTabs({
                       onChange={async (e) => {
                         const r = await setMappingReserved(m.id, leadId, e.target.checked);
                         if (r.error) toast.error(r.error);
-                        else syncRefresh();
+                        else void mappingsQuery.reload();
                       }}
                     />
                     Reserved
@@ -612,18 +613,20 @@ export function LeadDetailTabs({
               }
               toast.success("Uploaded");
               if (context.fileName) {
-                setDocuments((prev) => [
-                  {
-                    id: crypto.randomUUID(),
-                    doc_type: context.docType,
-                    file_name: context.fileName,
-                    storage_path: "",
-                    created_at: new Date().toISOString(),
-                  },
-                  ...prev,
-                ]);
+                documentsQuery.setData((prev) => ({
+                  documents: [
+                    {
+                      id: crypto.randomUUID(),
+                      doc_type: context.docType,
+                      file_name: context.fileName,
+                      storage_path: "",
+                      created_at: new Date().toISOString(),
+                    },
+                    ...prev.documents,
+                  ],
+                }));
               }
-              syncRefresh();
+              void documentsQuery.reload();
               return true;
             }}
           />

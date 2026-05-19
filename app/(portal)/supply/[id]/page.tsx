@@ -41,79 +41,15 @@ export default async function SupplyDetailPage({
     .eq("is_active", true)
     .order("sort_order", { ascending: true });
 
-  const { data: activities } = await supabase
-    .from("supply_activities")
-    .select("id, activity_type, notes, created_at, created_by")
-    .eq("supply_id", id)
-    .order("created_at", { ascending: false })
-    .limit(50);
-
-  const { data: refs } = await supabase
-    .from("supply_references")
-    .select("*")
-    .eq("supply_id", id)
-    .order("created_at", { ascending: false });
-
   const { data: risks } = await supabase
     .from("supply_risk_markers")
-    .select("*")
+    .select("id, resolved_at")
     .eq("supply_id", id)
     .order("created_at", { ascending: false });
-
-  const refIds = (refs ?? []).map((r) => r.id as string).filter(Boolean);
-  const { data: refDocs } =
-    refIds.length > 0
-      ? await supabase
-          .from("supply_reference_documents")
-          .select("*")
-          .in("reference_id", refIds)
-          .order("created_at", { ascending: false })
-      : { data: [] as Record<string, unknown>[] };
-
-  const { data: mappingRows } = await supabase
-    .from("supply_mapping")
-    .select("lead_id, priority, trial_status, leads(id, name, phone, status, trail_number)")
-    .eq("supply_id", id)
-    .order("priority", { ascending: true });
-
-  type AssignedLead = {
-    lead_id: string;
-    name: string;
-    phone: string;
-    status: string;
-    trail_number: number | null;
-    priority: number;
-    trial_status: string;
-  };
-  const assignedLeads: AssignedLead[] = [];
-  const seenLead = new Set<string>();
-  for (const m of mappingRows ?? []) {
-    const lid = m.lead_id as string;
-    if (!lid || seenLead.has(lid)) continue;
-    const raw = m.leads;
-    const L = (Array.isArray(raw) ? raw[0] : raw) as {
-      id: string;
-      name: string;
-      phone: string;
-      status: string;
-      trail_number: number | null;
-    } | null;
-    if (!L?.id) continue;
-    seenLead.add(lid);
-    assignedLeads.push({
-      lead_id: L.id,
-      name: L.name,
-      phone: L.phone,
-      status: L.status,
-      trail_number: L.trail_number ?? null,
-      priority: m.priority as number,
-      trial_status: String(m.trial_status ?? ""),
-    });
-  }
 
   const { data: docs } = await supabase
     .from("supply_documents")
-    .select("*")
+    .select("id, doc_type, storage_path")
     .eq("supply_id", id)
     .order("created_at", { ascending: false });
 
@@ -171,12 +107,8 @@ export default async function SupplyDetailPage({
       />
       <SupplyDetailTabs
         supplyId={id}
-        activities={activities ?? []}
-        references={refs ?? []}
-        referenceDocuments={refDocs ?? []}
-        assignedLeads={assignedLeads}
-        risks={risks ?? []}
-        documents={docs ?? []}
+        initialDocuments={docs ?? []}
+        initialRisks={risks ?? []}
         profileForm={
           <SupplyForm
             mode="edit"
