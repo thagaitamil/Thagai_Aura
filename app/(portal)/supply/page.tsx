@@ -16,6 +16,9 @@ import { getSessionProfile, canWriteSupply } from "@/lib/auth/session";
 import { cn } from "@/lib/utils";
 import { SupplyFilters } from "@/components/supply/supply-filters";
 import { formatSupplyDisplayId } from "@/lib/display-ids";
+import { getSignedCrmDocUrl } from "@/lib/actions/documents";
+import { CACHE_TTL_SECONDS, cached } from "@/lib/cache/redis";
+import { cacheTags } from "@/lib/cache/tags";
 
 export const dynamic = "force-dynamic";
 
@@ -32,89 +35,118 @@ export default async function SupplyListPage({
     return typeof v === "string" ? v : "";
   };
 
-  // Fetch area options for filter UI
-  const { data: areas } = await supabase
-    .from("area_options")
-    .select("id, label")
-    .order("label");
+  const filterKey = JSON.stringify({
+    type: p("type"),
+    gender: p("gender"),
+    availability: p("availability"),
+    status: p("status"),
+    verified: p("verified"),
+    blacklisted: p("blacklisted"),
+    salary_max: p("salary_max"),
+    language: p("language"),
+    area: p("area"),
+  });
 
-  // Fetch supply profiles with risk count
-  let query = supabase
-    .from("supply_profiles")
-    .select(
-      "id, full_name, phone, type, availability, status, verification_status, is_blacklisted, gender, salary_12h, supply_number"
-    )
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false })
-    .limit(300);
+  const [areas, listData] = await Promise.all([
+    cached({
+      key: "areas:all:label-sorted",
+      tags: [cacheTags.areas],
+      ttlSeconds: CACHE_TTL_SECONDS,
+      getFresh: async () => {
+        const { data } = await supabase.from("area_options").select("id, label").order("label");
+        return data ?? [];
+      },
+    }),
+    cached({
+      key: `supply-list:${profile?.id ?? "anon"}:${profile?.role ?? "none"}:${filterKey}`,
+      tags: [cacheTags.supplyList, cacheTags.areas],
+      ttlSeconds: CACHE_TTL_SECONDS,
+      getFresh: async () => {
+        let query = supabase
+          .from("supply_profiles")
+          .select(
+            "id, full_name, phone, type, availability, status, verification_status, is_blacklisted, gender, salary_12h, supply_number"
+          )
+          .is("deleted_at", null)
+          .order("created_at", { ascending: false })
+          .limit(300);
 
-  if (p("type")) query = query.eq("type", p("type"));
-  if (p("gender")) query = query.eq("gender", p("gender"));
-  if (p("availability")) query = query.eq("availability", p("availability"));
-  if (p("status")) query = query.eq("status", p("status"));
-  if (p("verified")) query = query.eq("verification_status", p("verified"));
-  if (p("blacklisted") === "true") query = query.eq("is_blacklisted", true);
-  if (p("blacklisted") === "false") query = query.eq("is_blacklisted", false);
-  if (p("salary_max")) query = query.lte("salary_12h", Number(p("salary_max")));
-  if (p("language")) query = query.ilike("languages", `%${p("language")}%`);
+        if (p("type")) query = query.eq("type", p("type"));
+        if (p("gender")) query = query.eq("gender", p("gender"));
+        if (p("availability")) query = query.eq("availability", p("availability"));
+        if (p("status")) query = query.eq("status", p("status"));
+        if (p("verified")) query = query.eq("verification_status", p("verified"));
+        if (p("blacklisted") === "true") query = query.eq("is_blacklisted", true);
+        if (p("blacklisted") === "false") query = query.eq("is_blacklisted", false);
+        if (p("salary_max")) query = query.lte("salary_12h", Number(p("salary_max")));
+        if (p("language")) query = query.ilike("languages", `%${p("language")}%`);
 
-  const { data: rows } = await query;
+        const { data: rows } = await query;
 
-  // Filter by area tag (post-fetch for simplicity — area is a join table)
-  let filtered = rows ?? [];
-  if (p("area")) {
-    const { data: taggedIds } = await supabase
-      .from("supply_area_tags")
-      .select("supply_id")
-      .eq("area_option_id", p("area"));
-    const ids = new Set((taggedIds ?? []).map((t) => t.supply_id));
-    filtered = filtered.filter((r) => ids.has(r.id));
-  }
+        let filteredRows = rows ?? [];
+        if (p("area")) {
+          const { data: taggedIds } = await supabase
+            .from("supply_area_tags")
+            .select("supply_id")
+            .eq("area_option_id", p("area"));
+          const ids = new Set((taggedIds ?? []).map((t) => t.supply_id));
+          filteredRows = filteredRows.filter((r) => ids.has(r.id));
+        }
 
-  // Get risk counts and profile photos for listed profiles
-  const ids = filtered.map((r) => r.id);
+        const ids = filteredRows.map((r) => r.id);
+        if (!ids.length) {
+          return { rows: filteredRows, riskRows: [], photoRows: [] };
+        }
+
+        const [{ data: risks }, { data: photoDocs }] = await Promise.all([
+          supabase
+            .from("supply_risk_markers")
+            .select("supply_id")
+            .in("supply_id", ids)
+            .is("resolved_at", null),
+          supabase
+            .from("supply_documents")
+            .select("supply_id, storage_path")
+            .in("supply_id", ids)
+            .eq("doc_type", "photo")
+            .order("created_at", { ascending: false }),
+        ]);
+
+        return {
+          rows: filteredRows,
+          riskRows: risks ?? [],
+          photoRows: photoDocs ?? [],
+        };
+      },
+    }),
+  ]);
+
+  const filtered = listData.rows;
   const riskMap = new Map<string, number>();
   const photoUrlMap = new Map<string, string>();
 
-  if (ids.length > 0) {
-    const [{ data: risks }, { data: photoDocs }] = await Promise.all([
-      supabase
-        .from("supply_risk_markers")
-        .select("supply_id")
-        .in("supply_id", ids)
-        .is("resolved_at", null),
-      supabase
-        .from("supply_documents")
-        .select("supply_id, storage_path")
-        .in("supply_id", ids)
-        .eq("doc_type", "photo")
-        .order("created_at", { ascending: false }),
-    ]);
+  for (const r of listData.riskRows) {
+    riskMap.set(r.supply_id, (riskMap.get(r.supply_id) ?? 0) + 1);
+  }
 
-    for (const r of risks ?? []) {
-      riskMap.set(r.supply_id, (riskMap.get(r.supply_id) ?? 0) + 1);
-    }
-
-    // Deduplicate: keep only latest photo per supply (first occurrence after desc order)
-    const photoPathMap = new Map<string, string>();
-    for (const d of photoDocs ?? []) {
-      if (!photoPathMap.has(d.supply_id)) {
-        photoPathMap.set(d.supply_id, d.storage_path as string);
-      }
-    }
-
-    // Batch-generate signed URLs
-    if (photoPathMap.size > 0) {
-      const paths = Array.from(photoPathMap.values());
-      const { data: signed } = await supabase.storage
-        .from("crm-docs")
-        .createSignedUrls(paths, 3600);
-      for (const [supplyId, path] of Array.from(photoPathMap.entries())) {
-        const entry = (signed ?? []).find((s) => s.path === path);
-        if (entry?.signedUrl) photoUrlMap.set(supplyId, entry.signedUrl);
-      }
+  const photoPathMap = new Map<string, string>();
+  for (const d of listData.photoRows) {
+    if (!photoPathMap.has(d.supply_id)) {
+      photoPathMap.set(d.supply_id, d.storage_path as string);
     }
   }
+
+  await Promise.all(
+    Array.from(photoPathMap.entries()).map(async ([supplyId, path]) => {
+      const res = await cached({
+        key: `signed-url:supply-list-photo:${supplyId}:${path}`,
+        tags: [cacheTags.supply(supplyId)],
+        ttlSeconds: CACHE_TTL_SECONDS - 60,
+        getFresh: () => getSignedCrmDocUrl(path),
+      });
+      if (!res.error && res.url) photoUrlMap.set(supplyId, res.url);
+    })
+  );
 
   const canWrite = profile && canWriteSupply(profile.role);
 
@@ -143,7 +175,7 @@ export default async function SupplyListPage({
         )}
       </div>
 
-      <SupplyFilters areas={areas ?? []} />
+      <SupplyFilters areas={areas} />
 
       <div className="rounded-xl border border-border/80 bg-card shadow-sm">
         <Table>

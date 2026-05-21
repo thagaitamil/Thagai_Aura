@@ -16,6 +16,8 @@ import { cn } from "@/lib/utils";
 import { LeadFilters } from "@/components/leads/lead-filters";
 import { format, isPast, startOfDay, endOfDay } from "date-fns";
 import { formatTrailId } from "@/lib/display-ids";
+import { CACHE_TTL_SECONDS, cached } from "@/lib/cache/redis";
+import { cacheTags } from "@/lib/cache/tags";
 
 export const dynamic = "force-dynamic";
 
@@ -57,106 +59,133 @@ export default async function LeadsListPage({
     return typeof v === "string" ? v : "";
   };
 
+  const filterKey = JSON.stringify({
+    status: p("status"),
+    req_type: p("req_type"),
+    gender_pref: p("gender_pref"),
+    duration: p("duration"),
+    budget_max: p("budget_max"),
+    followup: p("followup"),
+    area: p("area"),
+    assignee: p("assignee"),
+    hour: format(new Date(), "yyyy-MM-dd-HH"),
+  });
+
   // Fetch supporting data for filters
-  const [{ data: areas }, { data: staff }] = await Promise.all([
-    supabase.from("area_options").select("id, label").order("label"),
-    supabase.from("profiles").select("id, full_name, email").eq("active", true).order("full_name"),
+  const [areas, staff] = await Promise.all([
+    cached({
+      key: "areas:all:label-sorted",
+      tags: [cacheTags.areas],
+      ttlSeconds: CACHE_TTL_SECONDS,
+      getFresh: async () => {
+        const { data } = await supabase.from("area_options").select("id, label").order("label");
+        return data ?? [];
+      },
+    }),
+    cached({
+      key: "profiles:active:label-sorted",
+      tags: [cacheTags.profiles],
+      ttlSeconds: CACHE_TTL_SECONDS,
+      getFresh: async () => {
+        const { data } = await supabase
+          .from("profiles")
+          .select("id, full_name, email")
+          .eq("active", true)
+          .order("full_name");
+        return data ?? [];
+      },
+    }),
   ]);
 
-  // Base query
-  let query = supabase
-    .from("leads")
-    .select(
-      `id, name, phone, status, follow_up_required, follow_up_at, created_at, created_by, trail_number,
-       requirement_type, service_duration, budget_max, start_date, end_date, service_is_ongoing,
-       lead_assignments(assigned_to, profiles:assigned_to(full_name, email))`
-    )
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false })
-    .limit(300);
+  const filtered = await cached({
+    key: `lead-list:${profile?.id ?? "anon"}:${profile?.role ?? "none"}:${filterKey}`,
+    tags: [cacheTags.leads, cacheTags.areas, cacheTags.profiles],
+    ttlSeconds: CACHE_TTL_SECONDS,
+    getFresh: async () => {
+      // Base query
+      let query = supabase
+        .from("leads")
+        .select(
+          `id, name, phone, status, follow_up_required, follow_up_at, created_at, created_by, trail_number,
+           requirement_type, service_duration, budget_max, start_date, end_date, service_is_ongoing,
+           lead_assignments(assigned_to, profiles:assigned_to(full_name, email))`
+        )
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false })
+        .limit(300);
 
-  // Role-based scope — sales only sees their leads
-  if (profile?.role === "sales") {
-    const { data: assigned } = await supabase
-      .from("lead_assignments")
-      .select("lead_id")
-      .eq("assigned_to", profile.id);
-    const { data: created } = await supabase
-      .from("leads")
-      .select("id")
-      .eq("created_by", profile.id)
-      .is("deleted_at", null);
-    const ids = new Set<string>();
-    assigned?.forEach((a) => ids.add(a.lead_id));
-    created?.forEach((c) => ids.add(c.id));
-    const list = Array.from(ids);
-    if (!list.length) {
-      return (
-        <div className="space-y-4">
-          <h1 className="font-serif text-2xl font-semibold">Leads</h1>
-          <p className="text-muted-foreground text-sm">
-            No leads assigned to you yet. Create a new lead or ask ops to assign you.
-          </p>
-          {canWriteLeads(profile.role) && (
-            <Link href="/leads/new" className={cn(buttonVariants(), "inline-flex items-center gap-2 bg-accent text-accent-foreground hover:bg-accent/90")}>
-              <Plus className="size-4" /> Add lead
-            </Link>
-          )}
-        </div>
-      );
-    }
-    query = query.in("id", list);
-  }
+      // Role-based scope — sales only sees their leads
+      if (profile?.role === "sales") {
+        const { data: assigned } = await supabase
+          .from("lead_assignments")
+          .select("lead_id")
+          .eq("assigned_to", profile.id);
+        const { data: created } = await supabase
+          .from("leads")
+          .select("id")
+          .eq("created_by", profile.id)
+          .is("deleted_at", null);
+        const ids = new Set<string>();
+        assigned?.forEach((a) => ids.add(a.lead_id));
+        created?.forEach((c) => ids.add(c.id));
+        const list = Array.from(ids);
+        if (!list.length) return [];
+        query = query.in("id", list);
+      }
 
-  // Apply filters
-  if (p("status")) query = query.eq("status", p("status"));
-  if (p("req_type")) query = query.eq("requirement_type", p("req_type"));
-  if (p("gender_pref")) query = query.eq("gender_preference", p("gender_pref"));
-  if (p("duration")) query = query.eq("service_duration", p("duration"));
-  if (p("budget_max")) query = query.lte("budget_max", Number(p("budget_max")));
-  if (p("followup") === "required") query = query.eq("follow_up_required", true);
-  if (p("followup") === "none") query = query.eq("follow_up_required", false);
-  if (p("followup") === "overdue") {
-    query = query
-      .eq("follow_up_required", true)
-      .not("follow_up_at", "is", null)
-      .lt("follow_up_at", new Date().toISOString());
-  }
-  if (p("followup") === "due_today") {
-    const dayStart = startOfDay(new Date()).toISOString();
-    const dayEnd = endOfDay(new Date()).toISOString();
-    query = query
-      .eq("follow_up_required", true)
-      .not("follow_up_at", "is", null)
-      .gte("follow_up_at", dayStart)
-      .lte("follow_up_at", dayEnd);
-  }
+      // Apply filters
+      if (p("status")) query = query.eq("status", p("status"));
+      if (p("req_type")) query = query.eq("requirement_type", p("req_type"));
+      if (p("gender_pref")) query = query.eq("gender_preference", p("gender_pref"));
+      if (p("duration")) query = query.eq("service_duration", p("duration"));
+      if (p("budget_max")) query = query.lte("budget_max", Number(p("budget_max")));
+      if (p("followup") === "required") query = query.eq("follow_up_required", true);
+      if (p("followup") === "none") query = query.eq("follow_up_required", false);
+      if (p("followup") === "overdue") {
+        query = query
+          .eq("follow_up_required", true)
+          .not("follow_up_at", "is", null)
+          .lt("follow_up_at", new Date().toISOString());
+      }
+      if (p("followup") === "due_today") {
+        const dayStart = startOfDay(new Date()).toISOString();
+        const dayEnd = endOfDay(new Date()).toISOString();
+        query = query
+          .eq("follow_up_required", true)
+          .not("follow_up_at", "is", null)
+          .gte("follow_up_at", dayStart)
+          .lte("follow_up_at", dayEnd);
+      }
 
-  const { data: rows } = await query;
+      const { data: rows } = await query;
 
-  // Post-filter by area tag
-  let filtered = rows ?? [];
-  if (p("area")) {
-    const { data: taggedIds } = await supabase
-      .from("lead_area_tags")
-      .select("lead_id")
-      .eq("area_option_id", p("area"));
-    const ids = new Set((taggedIds ?? []).map((t) => t.lead_id));
-    filtered = filtered.filter((r) => ids.has(r.id));
-  }
+      // Post-filter by area tag
+      let next = rows ?? [];
+      if (p("area")) {
+        const { data: taggedIds } = await supabase
+          .from("lead_area_tags")
+          .select("lead_id")
+          .eq("area_option_id", p("area"));
+        const ids = new Set((taggedIds ?? []).map((t) => t.lead_id));
+        next = next.filter((r) => ids.has(r.id));
+      }
 
-  // Post-filter by assignee
-  if (p("assignee") === "unassigned") {
-    filtered = filtered.filter((r) => {
-      const a = Array.isArray(r.lead_assignments) ? r.lead_assignments : [];
-      return a.length === 0;
-    });
-  } else if (p("assignee")) {
-    filtered = filtered.filter((r) => {
-      const a = Array.isArray(r.lead_assignments) ? r.lead_assignments : [];
-      return a.some((x: Record<string, unknown>) => x.assigned_to === p("assignee"));
-    });
-  }
+      // Post-filter by assignee
+      if (p("assignee") === "unassigned") {
+        next = next.filter((r) => {
+          const a = Array.isArray(r.lead_assignments) ? r.lead_assignments : [];
+          return a.length === 0;
+        });
+      } else if (p("assignee")) {
+        next = next.filter((r) => {
+          const a = Array.isArray(r.lead_assignments) ? r.lead_assignments : [];
+          return a.some((x: Record<string, unknown>) => x.assigned_to === p("assignee"));
+        });
+      }
+
+      return next;
+    },
+  });
 
   const canWrite = profile && canWriteLeads(profile.role);
 
@@ -183,7 +212,7 @@ export default async function LeadsListPage({
         )}
       </div>
 
-      <LeadFilters areas={areas ?? []} staff={staff ?? []} />
+      <LeadFilters areas={areas} staff={staff} />
 
       <div className="rounded-xl border border-border/80 bg-card shadow-sm">
         <Table>

@@ -8,7 +8,7 @@ import {
   parseSupplySearchToken,
   parseTrailSearchToken,
 } from "@/lib/display-ids";
-import { cached } from "@/lib/cache/redis";
+import { CACHE_TTL_SECONDS, cached } from "@/lib/cache/redis";
 import { cacheTags } from "@/lib/cache/tags";
 
 function ilikePattern(q: string) {
@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
   const payload = await cached({
     key: `global-search:${user.id}:${qRaw.toLowerCase()}`,
     tags: [cacheTags.search, cacheTags.leads, cacheTags.supplyList],
-    ttlSeconds: 45,
+    ttlSeconds: CACHE_TTL_SECONDS,
     getFresh: async () => {
       const leadMap = new Map<string, { id: string; name: string; phone: string; sub?: string }>();
       const supplyMap = new Map<string, { id: string; full_name: string; phone: string; sub?: string }>();

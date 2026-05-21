@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { getPublicSupabaseKey } from "@/lib/supabase/env-keys";
 import { parseSupplySearchToken } from "@/lib/display-ids";
-import { cached } from "@/lib/cache/redis";
+import { CACHE_TTL_SECONDS, cached } from "@/lib/cache/redis";
 import { cacheTags } from "@/lib/cache/tags";
 
 export async function GET(request: NextRequest) {
@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
   const payload = await cached({
     key: `supply:picker:${user.id}:${q.toLowerCase()}`,
     tags: [cacheTags.supplyList],
-    ttlSeconds: 60,
+    ttlSeconds: CACHE_TTL_SECONDS,
     getFresh: async () => {
       const num = parseSupplySearchToken(q);
 

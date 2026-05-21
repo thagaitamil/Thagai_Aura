@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { getPublicSupabaseKey } from "@/lib/supabase/env-keys";
-import { cached } from "@/lib/cache/redis";
+import { CACHE_TTL_SECONDS, cached } from "@/lib/cache/redis";
 import { cacheTags } from "@/lib/cache/tags";
 
 export async function GET(request: NextRequest) {
@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
   const payload = await cached({
     key: `areas:search:${q.toLowerCase()}`,
     tags: [cacheTags.areas],
-    ttlSeconds: 300,
+    ttlSeconds: CACHE_TTL_SECONDS,
     getFresh: async () => {
       let query = supabase
         .from("area_options")

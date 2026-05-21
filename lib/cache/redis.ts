@@ -9,6 +9,8 @@ type CacheOptions<T> = {
   getFresh: () => Promise<T>;
 };
 
+export const CACHE_TTL_SECONDS = 60 * 60;
+
 const appPrefix = process.env.REDIS_CACHE_PREFIX ?? "aura";
 const memoryCache = new Map<string, { expiresAt: number; value: unknown }>();
 

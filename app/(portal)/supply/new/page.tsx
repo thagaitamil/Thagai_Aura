@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionProfile, canWriteSupply } from "@/lib/auth/session";
 import { SupplyForm } from "@/components/supply/supply-form";
+import { CACHE_TTL_SECONDS, cached } from "@/lib/cache/redis";
+import { cacheTags } from "@/lib/cache/tags";
 
 export default async function NewSupplyPage() {
   const { profile } = await getSessionProfile();
@@ -9,11 +11,19 @@ export default async function NewSupplyPage() {
     redirect("/supply");
   }
   const supabase = createClient();
-  const { data: areas } = await supabase
-    .from("area_options")
-    .select("id, label")
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true });
+  const areas = await cached({
+    key: "areas:active:sorted",
+    tags: [cacheTags.areas],
+    ttlSeconds: CACHE_TTL_SECONDS,
+    getFresh: async () => {
+      const { data } = await supabase
+        .from("area_options")
+        .select("id, label")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true });
+      return data ?? [];
+    },
+  });
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -25,7 +35,7 @@ export default async function NewSupplyPage() {
       </div>
       <SupplyForm
         mode="create"
-        areas={areas ?? []}
+        areas={areas}
         isAdmin={profile.role === "admin"}
       />
     </div>

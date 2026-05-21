@@ -10,6 +10,8 @@ import { AlertTriangle, UserCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getSignedCrmDocUrl } from "@/lib/actions/documents";
 import { formatSupplyDisplayId } from "@/lib/display-ids";
+import { CACHE_TTL_SECONDS, cached } from "@/lib/cache/redis";
+import { cacheTags } from "@/lib/cache/tags";
 
 export const dynamic = "force-dynamic";
 
@@ -21,37 +23,75 @@ export default async function SupplyDetailPage({
   const { id } = await params;
   const supabase = createClient();
   const { profile } = await getSessionProfile();
-  const { data: row } = await supabase
-    .from("supply_profiles")
-    .select("*")
-    .eq("id", id)
-    .is("deleted_at", null)
-    .maybeSingle();
+  const [row, tagRows, areas, risks, docs] = await Promise.all([
+    cached({
+      key: `supply-detail:${id}:profile`,
+      tags: [cacheTags.supplyList, cacheTags.supply(id)],
+      ttlSeconds: CACHE_TTL_SECONDS,
+      getFresh: async () => {
+        const { data } = await supabase
+          .from("supply_profiles")
+          .select("*")
+          .eq("id", id)
+          .is("deleted_at", null)
+          .maybeSingle();
+        return data;
+      },
+    }),
+    cached({
+      key: `supply-detail:${id}:areas`,
+      tags: [cacheTags.areas, cacheTags.supplyList, cacheTags.supply(id)],
+      ttlSeconds: CACHE_TTL_SECONDS,
+      getFresh: async () => {
+        const { data } = await supabase
+          .from("supply_area_tags")
+          .select("area_option_id")
+          .eq("supply_id", id);
+        return data ?? [];
+      },
+    }),
+    cached({
+      key: "areas:active:sorted",
+      tags: [cacheTags.areas],
+      ttlSeconds: CACHE_TTL_SECONDS,
+      getFresh: async () => {
+        const { data } = await supabase
+          .from("area_options")
+          .select("id, label")
+          .eq("is_active", true)
+          .order("sort_order", { ascending: true });
+        return data ?? [];
+      },
+    }),
+    cached({
+      key: `supply-detail:${id}:risk-summary`,
+      tags: [cacheTags.supplyList, cacheTags.supply(id)],
+      ttlSeconds: CACHE_TTL_SECONDS,
+      getFresh: async () => {
+        const { data } = await supabase
+          .from("supply_risk_markers")
+          .select("id, resolved_at")
+          .eq("supply_id", id)
+          .order("created_at", { ascending: false });
+        return data ?? [];
+      },
+    }),
+    cached({
+      key: `supply-detail:${id}:document-summary`,
+      tags: [cacheTags.supplyList, cacheTags.supply(id)],
+      ttlSeconds: CACHE_TTL_SECONDS,
+      getFresh: async () => {
+        const { data } = await supabase
+          .from("supply_documents")
+          .select("id, doc_type, storage_path")
+          .eq("supply_id", id)
+          .order("created_at", { ascending: false });
+        return data ?? [];
+      },
+    }),
+  ]);
 
   if (!row) notFound();
-
-  const { data: tagRows } = await supabase
-    .from("supply_area_tags")
-    .select("area_option_id")
-    .eq("supply_id", id);
-
-  const { data: areas } = await supabase
-    .from("area_options")
-    .select("id, label")
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true });
-
-  const { data: risks } = await supabase
-    .from("supply_risk_markers")
-    .select("id, resolved_at")
-    .eq("supply_id", id)
-    .order("created_at", { ascending: false });
-
-  const { data: docs } = await supabase
-    .from("supply_documents")
-    .select("id, doc_type, storage_path")
-    .eq("supply_id", id)
-    .order("created_at", { ascending: false });
 
   const canWrite = profile && canWriteSupply(profile.role);
 
@@ -59,7 +99,13 @@ export default async function SupplyDetailPage({
   const photoDoc = (docs ?? []).find((d) => d.doc_type === "photo");
   let photoUrl: string | null = null;
   if (photoDoc?.storage_path) {
-    const res = await getSignedCrmDocUrl(photoDoc.storage_path as string);
+    const storagePath = photoDoc.storage_path as string;
+    const res = await cached({
+      key: `signed-url:supply-photo:${id}:${storagePath}`,
+      tags: [cacheTags.supply(id)],
+      ttlSeconds: CACHE_TTL_SECONDS - 60,
+      getFresh: () => getSignedCrmDocUrl(storagePath),
+    });
     if (!res.error && res.url) photoUrl = res.url;
   }
 
@@ -87,7 +133,7 @@ export default async function SupplyDetailPage({
 
   const initial = {
     ...row,
-    area_option_ids: (tagRows ?? []).map((t) => t.area_option_id),
+    area_option_ids: tagRows.map((t) => t.area_option_id),
   };
 
   return (

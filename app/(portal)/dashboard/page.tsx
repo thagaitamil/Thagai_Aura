@@ -12,6 +12,8 @@ import type {
 import { eachDayOfInterval, format, startOfDay, subDays, parseISO } from "date-fns";
 import { AlertCircle, Users, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CACHE_TTL_SECONDS, cached } from "@/lib/cache/redis";
+import { cacheTags } from "@/lib/cache/tags";
 
 export const dynamic = "force-dynamic";
 
@@ -84,9 +86,39 @@ export default async function DashboardPage({
   const todayEnd = new Date(new Date().setHours(23, 59, 59, 999)).toISOString();
 
   // Fetch filter dropdowns
-  const [{ data: staffList }, { data: areaList }] = await Promise.all([
-    supabase.from("profiles").select("id, full_name, email").eq("active", true).order("full_name"),
-    supabase.from("area_options").select("id, label").order("label"),
+  const dashboardKey = JSON.stringify({
+    date_from: p("date_from"),
+    date_to: p("date_to"),
+    salesperson: p("salesperson"),
+    area: p("area"),
+    lead_status: p("lead_status"),
+    service_type: p("service_type"),
+    hour: format(new Date(), "yyyy-MM-dd-HH"),
+  });
+
+  const [staffList, areaList] = await Promise.all([
+    cached({
+      key: "profiles:active:sorted",
+      tags: [cacheTags.profiles],
+      ttlSeconds: CACHE_TTL_SECONDS,
+      getFresh: async () => {
+        const { data } = await supabase
+          .from("profiles")
+          .select("id, full_name, email")
+          .eq("active", true)
+          .order("full_name");
+        return data ?? [];
+      },
+    }),
+    cached({
+      key: "areas:all:label-sorted",
+      tags: [cacheTags.areas],
+      ttlSeconds: CACHE_TTL_SECONDS,
+      getFresh: async () => {
+        const { data } = await supabase.from("area_options").select("id, label").order("label");
+        return data ?? [];
+      },
+    }),
   ]);
 
   // Helper: get lead IDs matching area/salesperson filters
@@ -152,41 +184,47 @@ export default async function DashboardPage({
     typeRows,
     staffRows,
     assignmentRows,
-  ] = await Promise.all([
-    supabase.from("supply_profiles").select("id", { count: "exact", head: true }).is("deleted_at", null),
-    leadsBase(),
-    // Overdue follow-ups
-    leadsBase()
-      .eq("follow_up_required", true)
-      .not("follow_up_at", "is", null).lt("follow_up_at", nowIso)
-      .neq("status", "converted").neq("status", "closed_lost"),
-    // Pending future follow-ups
-    leadsBase()
-      .eq("follow_up_required", true)
-      .not("follow_up_at", "is", null).gte("follow_up_at", nowIso)
-      .neq("status", "converted").neq("status", "closed_lost"),
-    supabase.from("supply_profiles").select("id", { count: "exact", head: true })
-      .is("deleted_at", null).eq("status", "available"),
-    supabase.from("supply_profiles").select("id", { count: "exact", head: true })
-      .is("deleted_at", null).eq("status", "on_duty"),
-    supabase.from("supply_profiles").select("id", { count: "exact", head: true })
-      .is("deleted_at", null).eq("is_blacklisted", true),
-    supabase.from("supply_profiles").select("id", { count: "exact", head: true })
-      .is("deleted_at", null).eq("verification_status", "pending"),
-    // Follow-ups due today (was mislabeled as trials)
-    supabase.from("lead_follow_ups").select("id", { count: "exact", head: true })
-      .gte("due_at", todayStart).lte("due_at", todayEnd),
-    statusRowsBase(),
-    (() => {
-      let q = supabase.from("leads").select("created_at").is("deleted_at", null)
-        .gte("created_at", startDay.toISOString()).lte("created_at", endDay.toISOString());
-      if (filteredLeadIds) q = q.in("id", filteredLeadIds.length ? filteredLeadIds : ["__none__"]);
-      return q;
-    })(),
-    supabase.from("supply_profiles").select("type").is("deleted_at", null).limit(8000),
-    supabase.from("profiles").select("id, full_name, email").eq("active", true).order("full_name"),
-    supabase.from("lead_assignments").select("lead_id, assigned_to"),
-  ]);
+  ] = await cached({
+    key: `dashboard:metrics:${profile?.id ?? "anon"}:${profile?.role ?? "none"}:${dashboardKey}`,
+    tags: [cacheTags.dashboard, cacheTags.leads, cacheTags.supplyList, cacheTags.profiles, cacheTags.areas],
+    ttlSeconds: CACHE_TTL_SECONDS,
+    getFresh: async () =>
+      Promise.all([
+        supabase.from("supply_profiles").select("id", { count: "exact", head: true }).is("deleted_at", null),
+        leadsBase(),
+        // Overdue follow-ups
+        leadsBase()
+          .eq("follow_up_required", true)
+          .not("follow_up_at", "is", null).lt("follow_up_at", nowIso)
+          .neq("status", "converted").neq("status", "closed_lost"),
+        // Pending future follow-ups
+        leadsBase()
+          .eq("follow_up_required", true)
+          .not("follow_up_at", "is", null).gte("follow_up_at", nowIso)
+          .neq("status", "converted").neq("status", "closed_lost"),
+        supabase.from("supply_profiles").select("id", { count: "exact", head: true })
+          .is("deleted_at", null).eq("status", "available"),
+        supabase.from("supply_profiles").select("id", { count: "exact", head: true })
+          .is("deleted_at", null).eq("status", "on_duty"),
+        supabase.from("supply_profiles").select("id", { count: "exact", head: true })
+          .is("deleted_at", null).eq("is_blacklisted", true),
+        supabase.from("supply_profiles").select("id", { count: "exact", head: true })
+          .is("deleted_at", null).eq("verification_status", "pending"),
+        // Follow-ups due today (was mislabeled as trials)
+        supabase.from("lead_follow_ups").select("id", { count: "exact", head: true })
+          .gte("due_at", todayStart).lte("due_at", todayEnd),
+        statusRowsBase(),
+        (() => {
+          let q = supabase.from("leads").select("created_at").is("deleted_at", null)
+            .gte("created_at", startDay.toISOString()).lte("created_at", endDay.toISOString());
+          if (filteredLeadIds) q = q.in("id", filteredLeadIds.length ? filteredLeadIds : ["__none__"]);
+          return q;
+        })(),
+        supabase.from("supply_profiles").select("type").is("deleted_at", null).limit(8000),
+        supabase.from("profiles").select("id, full_name, email").eq("active", true).order("full_name"),
+        supabase.from("lead_assignments").select("lead_id, assigned_to"),
+      ]),
+  });
 
   // Lead status breakdown
   const statusCounts: Record<string, number> = {};
@@ -239,7 +277,15 @@ export default async function DashboardPage({
     .from("lead_assignments")
     .select("assigned_to, leads(id, status, follow_up_required, follow_up_at)");
   if (filterSalesperson) salespersonQuery = salespersonQuery.eq("assigned_to", filterSalesperson);
-  const { data: assignedLeadsData } = await salespersonQuery;
+  const assignedLeadsData = await cached({
+    key: `dashboard:salesperson:${profile?.id ?? "anon"}:${profile?.role ?? "none"}:${dashboardKey}`,
+    tags: [cacheTags.dashboard, cacheTags.leads, cacheTags.profiles],
+    ttlSeconds: CACHE_TTL_SECONDS,
+    getFresh: async () => {
+      const { data } = await salespersonQuery;
+      return data ?? [];
+    },
+  });
 
   type SalespersonRow = {
     id: string;
@@ -300,7 +346,7 @@ export default async function DashboardPage({
       </div>
 
       {/* ── Filter Bar ─────────────────────────────────────── */}
-      <DashboardFilters staff={staffList ?? []} areas={areaList ?? []} />
+  <DashboardFilters staff={staffList} areas={areaList} />
 
       {/* ── Lead Metrics ───────────────────────────────────── */}
       <section className="space-y-3">

@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionProfile, isAdmin } from "@/lib/auth/session";
 import { TeamUsersAdmin } from "@/components/admin/team-users-admin";
+import { CACHE_TTL_SECONDS, cached } from "@/lib/cache/redis";
+import { cacheTags } from "@/lib/cache/tags";
 
 export default async function AdminUsersPage() {
   const { profile } = await getSessionProfile();
@@ -9,10 +11,18 @@ export default async function AdminUsersPage() {
     redirect("/dashboard");
   }
   const supabase = createClient();
-  const { data: users } = await supabase
-    .from("profiles")
-    .select("id, email, full_name, role, active, created_at")
-    .order("created_at", { ascending: false });
+  const users = await cached({
+    key: "admin-users:list",
+    tags: [cacheTags.profiles],
+    ttlSeconds: CACHE_TTL_SECONDS,
+    getFresh: async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, email, full_name, role, active, created_at")
+        .order("created_at", { ascending: false });
+      return data ?? [];
+    },
+  });
 
   return (
     <div className="mx-auto max-w-3xl space-y-8">
@@ -24,7 +34,7 @@ export default async function AdminUsersPage() {
           work.
         </p>
       </div>
-      <TeamUsersAdmin users={users ?? []} currentUserId={profile.id} />
+      <TeamUsersAdmin users={users} currentUserId={profile.id} />
     </div>
   );
 }
