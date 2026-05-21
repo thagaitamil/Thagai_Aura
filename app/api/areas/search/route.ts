@@ -33,10 +33,10 @@ export async function GET(request: NextRequest) {
     },
   });
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { data: claimsData } = await supabase.auth.getClaims();
+  if (!claimsData?.claims.sub) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const q = (request.nextUrl.searchParams.get("q") ?? "").trim();
   const payload = await cached({

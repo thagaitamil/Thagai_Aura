@@ -9,10 +9,8 @@ export default async function PortalLayout({
   children: React.ReactNode;
 }) {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  const { data: claimsData } = await supabase.auth.getClaims();
+  if (!claimsData?.claims.sub) redirect("/login");
 
   const { profile, accessDenied } = await getSessionProfile();
   if (!profile) {

@@ -34,16 +34,15 @@ export async function GET(request: NextRequest) {
     },
   });
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const userId = claimsData?.claims.sub;
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const q = (request.nextUrl.searchParams.get("q") ?? "").trim();
   if (q.length < 1) return NextResponse.json({ rows: [] });
 
   const payload = await cached({
-    key: `supply:picker:${user.id}:${q.toLowerCase()}`,
+    key: `supply:picker:${userId}:${q.toLowerCase()}`,
     tags: [cacheTags.supplyList],
     ttlSeconds: CACHE_TTL_SECONDS,
     getFresh: async () => {

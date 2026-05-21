@@ -47,10 +47,9 @@ export async function GET(request: NextRequest) {
     },
   });
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const userId = claimsData?.claims.sub;
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const qRaw = (request.nextUrl.searchParams.get("q") ?? "").trim();
   const pat = ilikePattern(qRaw);
@@ -62,7 +61,7 @@ export async function GET(request: NextRequest) {
   }
 
   const payload = await cached({
-    key: `global-search:${user.id}:${qRaw.toLowerCase()}`,
+    key: `global-search:${userId}:${qRaw.toLowerCase()}`,
     tags: [cacheTags.search, cacheTags.leads, cacheTags.supplyList],
     ttlSeconds: CACHE_TTL_SECONDS,
     getFresh: async () => {

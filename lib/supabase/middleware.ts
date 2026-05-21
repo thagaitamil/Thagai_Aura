@@ -30,21 +30,20 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const hasUser = !!claimsData?.claims.sub;
 
   const path = request.nextUrl.pathname;
   const isLogin = path === "/login";
   const isApi = path.startsWith("/api");
 
-  if (!user && !isLogin && !isApi) {
+  if (!hasUser && !isLogin && !isApi) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
-  if (user && isLogin) {
+  if (hasUser && isLogin) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     return NextResponse.redirect(url);

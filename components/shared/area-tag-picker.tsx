@@ -10,24 +10,6 @@ import { Button } from "@/components/ui/button";
 import { PickerPopover } from "@/components/shared/picker-popover";
 
 type Area = { id: string; label: string };
-const areaSearchCache = new Map<string, { expiresAt: number; areas: Area[] }>();
-const AREA_SEARCH_CACHE_MS = 60 * 60 * 1000;
-
-function readAreaSearchCache(query: string) {
-  const hit = areaSearchCache.get(query.toLowerCase());
-  if (!hit || hit.expiresAt < Date.now()) {
-    areaSearchCache.delete(query.toLowerCase());
-    return null;
-  }
-  return hit.areas;
-}
-
-function writeAreaSearchCache(query: string, areas: Area[]) {
-  areaSearchCache.set(query.toLowerCase(), {
-    expiresAt: Date.now() + AREA_SEARCH_CACHE_MS,
-    areas,
-  });
-}
 
 export function AreaTagPicker({
   fieldName = "area_option_id",
@@ -64,12 +46,6 @@ export function AreaTagPicker({
       setLoading(false);
       return;
     }
-    const cached = readAreaSearchCache(trimmed);
-    if (cached) {
-      setHits(cached);
-      setLoading(false);
-      return;
-    }
     setLoading(true);
     try {
       const res = await fetch(
@@ -82,9 +58,7 @@ export function AreaTagPicker({
         return;
       }
       const data = (await res.json()) as { areas?: Area[] };
-      const areas = data.areas ?? [];
-      writeAreaSearchCache(trimmed, areas);
-      setHits(areas);
+      setHits(data.areas ?? []);
     } catch {
       if (!signal.aborted) setHits([]);
     } finally {
