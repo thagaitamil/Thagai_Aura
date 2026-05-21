@@ -17,86 +17,60 @@ export default async function LeadDetailPage({
   const { id } = await params;
   const supabase = createClient();
   const { profile } = await getSessionProfile();
-  const [row, tagRows, areas, staff, assignment, mappings] = await Promise.all([
-    cached({
-      key: `lead-detail:${id}:profile`,
-      tags: [cacheTags.leads, cacheTags.lead(id)],
-      ttlSeconds: CACHE_TTL_SECONDS,
-      getFresh: async () => {
-        const { data } = await supabase
+  const detail = await cached({
+    key: `lead-detail:${id}:full`,
+    tags: [
+      cacheTags.areas,
+      cacheTags.leads,
+      cacheTags.lead(id),
+      cacheTags.profiles,
+      cacheTags.supplyList,
+    ],
+    ttlSeconds: CACHE_TTL_SECONDS,
+    getFresh: async () => {
+      const [lead, tagRows, areas, staff, assignment, mappings] = await Promise.all([
+        supabase
           .from("leads")
           .select("*")
           .eq("id", id)
           .is("deleted_at", null)
-          .maybeSingle();
-        return data;
-      },
-    }),
-    cached({
-      key: `lead-detail:${id}:areas`,
-      tags: [cacheTags.areas, cacheTags.leads, cacheTags.lead(id)],
-      ttlSeconds: CACHE_TTL_SECONDS,
-      getFresh: async () => {
-        const { data } = await supabase
+          .maybeSingle(),
+        supabase
           .from("lead_area_tags")
           .select("area_option_id")
-          .eq("lead_id", id);
-        return data ?? [];
-      },
-    }),
-    cached({
-      key: "areas:active:sorted",
-      tags: [cacheTags.areas],
-      ttlSeconds: CACHE_TTL_SECONDS,
-      getFresh: async () => {
-        const { data } = await supabase
+          .eq("lead_id", id),
+        supabase
           .from("area_options")
           .select("id, label")
           .eq("is_active", true)
-          .order("sort_order", { ascending: true });
-        return data ?? [];
-      },
-    }),
-    cached({
-      key: "profiles:active:sorted",
-      tags: [cacheTags.profiles],
-      ttlSeconds: CACHE_TTL_SECONDS,
-      getFresh: async () => {
-        const { data } = await supabase
+          .order("sort_order", { ascending: true }),
+        supabase
           .from("profiles")
           .select("id, full_name, email")
           .eq("active", true)
-          .order("full_name", { ascending: true });
-        return data ?? [];
-      },
-    }),
-    cached({
-      key: `lead-detail:${id}:assignment`,
-      tags: [cacheTags.profiles, cacheTags.leads, cacheTags.lead(id)],
-      ttlSeconds: CACHE_TTL_SECONDS,
-      getFresh: async () => {
-        const { data } = await supabase
+          .order("full_name", { ascending: true }),
+        supabase
           .from("lead_assignments")
           .select("assigned_to")
           .eq("lead_id", id)
-          .maybeSingle();
-        return data;
-      },
-    }),
-    cached({
-      key: `lead-detail:${id}:mappings`,
-      tags: [cacheTags.leads, cacheTags.lead(id), cacheTags.supplyList],
-      ttlSeconds: CACHE_TTL_SECONDS,
-      getFresh: async () => {
-        const { data } = await supabase
+          .maybeSingle(),
+        supabase
           .from("supply_mapping")
           .select("*, supply_profiles(full_name, status, type, supply_number)")
           .eq("lead_id", id)
-          .order("priority", { ascending: true });
-        return data ?? [];
-      },
-    }),
-  ]);
+          .order("priority", { ascending: true }),
+      ]);
+      return {
+        row: lead.data,
+        tagRows: tagRows.data ?? [],
+        areas: areas.data ?? [],
+        staff: staff.data ?? [],
+        assignment: assignment.data,
+        mappings: mappings.data ?? [],
+      };
+    },
+  });
+  const { row, tagRows, areas, staff, assignment, mappings } = detail;
 
   if (!row) notFound();
 

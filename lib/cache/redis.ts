@@ -31,30 +31,36 @@ function namespaced(key: string) {
   return `${appPrefix}:${key}`;
 }
 
-async function buildVersionedKey(key: string, tags: string[] = []) {
-  if (!tags.length) return namespaced(`cache:${key}`);
-  const client = getRedis();
-  const tagKeys = tags.map((tag) => namespaced(`tag:${tag}:v`));
-  const values = client
-    ? await client.mget<(number | null)[]>(...tagKeys).catch(() => [])
-    : [];
-  const versions = tags.map((tag, index) => `${tag}:${values[index] ?? 0}`);
-  return namespaced(`cache:${key}:${versions.join("|")}`);
+function cacheKey(key: string) {
+  return namespaced(`cache:${key}`);
+}
+
+function tagKeysKey(tag: string) {
+  return namespaced(`tag:${tag}:keys`);
 }
 
 export async function cached<T>({ key, ttlSeconds, tags = [], getFresh }: CacheOptions<T>): Promise<T> {
-  const cacheKey = await buildVersionedKey(key, tags);
+  const keyName = cacheKey(key);
   const client = getRedis();
 
   if (!client) {
     return getFresh();
   }
 
-  const hit = await client.get<T>(cacheKey).catch(() => null);
+  const hit = await client.get<T>(keyName).catch(() => null);
   if (hit !== null) return hit;
 
   const fresh = await getFresh();
-  await client.set(cacheKey, fresh, { ex: ttlSeconds }).catch(() => undefined);
+  await client.set(keyName, fresh, { ex: ttlSeconds }).catch(() => undefined);
+  if (tags.length) {
+    await Promise.all(
+      Array.from(new Set(tags)).map(async (tag) => {
+        const setKey = tagKeysKey(tag);
+        await client.sadd(setKey, keyName).catch(() => undefined);
+        await client.expire(setKey, Math.max(ttlSeconds, CACHE_TTL_SECONDS) + 60).catch(() => undefined);
+      }),
+    );
+  }
   return fresh;
 }
 
@@ -63,11 +69,27 @@ export async function invalidateCacheTags(tags: string[]) {
   const client = getRedis();
   if (!client) return;
 
-  await Promise.all(
-    tags.map((tag) => client.incr(namespaced(`tag:${tag}:v`)).catch(() => undefined)),
+  const uniqueTags = Array.from(new Set(tags));
+  const keySets = await Promise.all(
+    uniqueTags.map((tag) => client.smembers<string[]>(tagKeysKey(tag)).catch(() => [])),
   );
+  const keys = Array.from(new Set(keySets.flat()));
+  if (keys.length) {
+    await Promise.all(
+      chunk(keys, 100).map((batch) => client.del(...batch).catch(() => undefined)),
+    );
+  }
+  await Promise.all(uniqueTags.map((tag) => client.del(tagKeysKey(tag)).catch(() => undefined)));
 }
 
 export function redisCacheEnabled() {
   return !!getRedis();
+}
+
+function chunk<T>(items: T[], size: number) {
+  const batches: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    batches.push(items.slice(i, i + size));
+  }
+  return batches;
 }

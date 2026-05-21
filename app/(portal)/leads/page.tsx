@@ -71,37 +71,18 @@ export default async function LeadsListPage({
     hour: format(new Date(), "yyyy-MM-dd-HH"),
   });
 
-  // Fetch supporting data for filters
-  const [areas, staff] = await Promise.all([
-    cached({
-      key: "areas:all:label-sorted",
-      tags: [cacheTags.areas],
-      ttlSeconds: CACHE_TTL_SECONDS,
-      getFresh: async () => {
-        const { data } = await supabase.from("area_options").select("id, label").order("label");
-        return data ?? [];
-      },
-    }),
-    cached({
-      key: "profiles:active:label-sorted",
-      tags: [cacheTags.profiles],
-      ttlSeconds: CACHE_TTL_SECONDS,
-      getFresh: async () => {
-        const { data } = await supabase
-          .from("profiles")
-          .select("id, full_name, email")
-          .eq("active", true)
-          .order("full_name");
-        return data ?? [];
-      },
-    }),
-  ]);
-
-  const filtered = await cached({
-    key: `lead-list:${profile?.id ?? "anon"}:${profile?.role ?? "none"}:${filterKey}`,
+  const listData = await cached({
+    key: `lead-page:${profile?.id ?? "anon"}:${profile?.role ?? "none"}:${filterKey}`,
     tags: [cacheTags.leads, cacheTags.areas, cacheTags.profiles],
     ttlSeconds: CACHE_TTL_SECONDS,
     getFresh: async () => {
+      const areasQuery = supabase.from("area_options").select("id, label").order("label");
+      const staffQuery = supabase
+        .from("profiles")
+        .select("id, full_name, email")
+        .eq("active", true)
+        .order("full_name");
+
       // Base query
       let query = supabase
         .from("leads")
@@ -129,7 +110,10 @@ export default async function LeadsListPage({
         assigned?.forEach((a) => ids.add(a.lead_id));
         created?.forEach((c) => ids.add(c.id));
         const list = Array.from(ids);
-        if (!list.length) return [];
+        if (!list.length) {
+          const [{ data: areas }, { data: staff }] = await Promise.all([areasQuery, staffQuery]);
+          return { areas: areas ?? [], staff: staff ?? [], rows: [] };
+        }
         query = query.in("id", list);
       }
 
@@ -157,7 +141,11 @@ export default async function LeadsListPage({
           .lte("follow_up_at", dayEnd);
       }
 
-      const { data: rows } = await query;
+      const [{ data: areas }, { data: staff }, { data: rows }] = await Promise.all([
+        areasQuery,
+        staffQuery,
+        query,
+      ]);
 
       // Post-filter by area tag
       let next = rows ?? [];
@@ -183,9 +171,14 @@ export default async function LeadsListPage({
         });
       }
 
-      return next;
+      return {
+        areas: areas ?? [],
+        staff: staff ?? [],
+        rows: next,
+      };
     },
   });
+  const filtered = listData.rows;
 
   const canWrite = profile && canWriteLeads(profile.role);
 
@@ -212,7 +205,7 @@ export default async function LeadsListPage({
         )}
       </div>
 
-      <LeadFilters areas={areas} staff={staff} />
+      <LeadFilters areas={listData.areas} staff={listData.staff} />
 
       <div className="rounded-xl border border-border/80 bg-card shadow-sm">
         <Table>
