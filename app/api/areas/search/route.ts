@@ -2,6 +2,8 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { getPublicSupabaseKey } from "@/lib/supabase/env-keys";
+import { cached } from "@/lib/cache/redis";
+import { cacheTags } from "@/lib/cache/tags";
 
 export async function GET(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
@@ -37,17 +39,25 @@ export async function GET(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const q = (request.nextUrl.searchParams.get("q") ?? "").trim();
-  let query = supabase
-    .from("area_options")
-    .select("id, label")
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true })
-    .order("label", { ascending: true })
-    .limit(50);
-  if (q.length >= 1) {
-    query = query.ilike("label", `%${q.replace(/[%_]/g, "")}%`);
-  }
-  const { data, error } = await query;
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ areas: data ?? [] });
+  const payload = await cached({
+    key: `areas:search:${q.toLowerCase()}`,
+    tags: [cacheTags.areas],
+    ttlSeconds: 300,
+    getFresh: async () => {
+      let query = supabase
+        .from("area_options")
+        .select("id, label")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true })
+        .order("label", { ascending: true })
+        .limit(50);
+      if (q.length >= 1) {
+        query = query.ilike("label", `%${q.replace(/[%_]/g, "")}%`);
+      }
+      const { data, error } = await query;
+      if (error) throw error;
+      return { areas: data ?? [] };
+    },
+  });
+  return NextResponse.json(payload);
 }

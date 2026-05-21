@@ -7,6 +7,8 @@ import { canWriteSupply, getSessionProfile, isAdmin } from "@/lib/auth/session";
 import { recomputeSupplyVerificationFromDocuments } from "@/lib/verification-sync";
 import { friendlyActionError } from "@/lib/actions/error-messages";
 import { titleCaseName } from "@/lib/text-format";
+import { invalidateCacheTags } from "@/lib/cache/redis";
+import { supplyMutationTags } from "@/lib/cache/tags";
 
 const aadhaarSchema = z.preprocess(
   (value) => {
@@ -54,6 +56,10 @@ function parseNum(v: string | null | undefined) {
   if (v == null || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+async function invalidateSupplyWrite(supplyId?: string | null) {
+  await invalidateCacheTags(supplyMutationTags(supplyId));
 }
 
 export async function createSupply(formData: FormData) {
@@ -132,6 +138,7 @@ export async function createSupply(formData: FormData) {
     if (tagErr) return { error: friendlyActionError(tagErr) };
   }
   await recomputeSupplyVerificationFromDocuments(supabase, data!.id);
+  await invalidateSupplyWrite(data?.id);
   revalidatePath("/supply");
   return { success: true as const, id: data!.id };
 }
@@ -238,6 +245,7 @@ export async function updateSupply(id: string, formData: FormData) {
       areaIds.map((area_option_id) => ({ supply_id: id, area_option_id }))
     );
   }
+  await invalidateSupplyWrite(id);
   revalidatePath("/supply");
   revalidatePath(`/supply/${id}`);
   return { success: true as const };
@@ -258,6 +266,7 @@ export async function addSupplyActivity(
     created_by: profile.id,
   });
   if (error) return { error: friendlyActionError(error) };
+  await invalidateSupplyWrite(supplyId);
   revalidatePath(`/supply/${supplyId}`);
   return { success: true };
 }
@@ -303,6 +312,7 @@ export async function addSupplyReference(formData: FormData) {
     supabase,
     referenceId
   );
+  await invalidateSupplyWrite(supplyId);
   revalidatePath(`/supply/${supplyId}`);
   return {
     success: true as const,
@@ -324,6 +334,7 @@ export async function addSupplyRisk(formData: FormData) {
     created_by: profile.id,
   });
   if (error) return { error: friendlyActionError(error) };
+  await invalidateSupplyWrite(supplyId);
   revalidatePath(`/supply/${supplyId}`);
   return { success: true };
 }
@@ -341,6 +352,7 @@ export async function updateReferenceVerification(
     .update({ verification_status: verificationStatus })
     .eq("id", refId);
   if (error) return { error: friendlyActionError(error) };
+  await invalidateSupplyWrite(supplyId);
   revalidatePath(`/supply/${supplyId}`);
   return { success: true };
 }
@@ -354,6 +366,7 @@ export async function resolveSupplyRisk(riskId: string, supplyId: string) {
     .update({ resolved_at: new Date().toISOString(), resolved_by: profile.id })
     .eq("id", riskId);
   if (error) return { error: friendlyActionError(error) };
+  await invalidateSupplyWrite(supplyId);
   revalidatePath(`/supply/${supplyId}`);
   return { success: true };
 }
@@ -387,6 +400,7 @@ export async function uploadSupplyDocument(formData: FormData) {
   });
   if (error) return { error: friendlyActionError(error) };
   await recomputeSupplyVerificationFromDocuments(supabase, supplyId);
+  await invalidateSupplyWrite(supplyId);
   revalidatePath(`/supply/${supplyId}`);
   return { success: true };
 }
@@ -464,6 +478,7 @@ export async function uploadSupplyReferenceDocument(formData: FormData) {
     supabase,
     referenceId
   );
+  await invalidateSupplyWrite(supplyId);
   revalidatePath(`/supply/${supplyId}`);
   return { success: true as const, document: uploaded.document, verificationStatus };
 }

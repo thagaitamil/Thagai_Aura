@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionProfile } from "@/lib/auth/session";
+import { invalidateCacheTags } from "@/lib/cache/redis";
+import { cacheTags } from "@/lib/cache/tags";
 
 const areaSchema = z.object({
   label: z.string().min(1).max(200),
@@ -17,6 +19,15 @@ const revalidateAreaConsumers = () => {
   revalidatePath("/leads");
   revalidatePath("/dashboard");
 };
+
+const invalidateAreaConsumers = () =>
+  invalidateCacheTags([
+    cacheTags.areas,
+    cacheTags.dashboard,
+    cacheTags.leads,
+    cacheTags.search,
+    cacheTags.supplyList,
+  ]);
 
 /** Inline create from searchable area combobox (staff who can edit leads or supply). */
 export async function createAreaQuick(rawLabel: string) {
@@ -43,6 +54,7 @@ export async function createAreaQuick(rawLabel: string) {
     .select("id")
     .single();
   if (error) return { error: error.message };
+  await invalidateAreaConsumers();
   revalidateAreaConsumers();
   return { success: true as const, id: data!.id as string };
 }
@@ -62,6 +74,7 @@ export async function createAreaOption(formData: FormData) {
     created_by: profile.id,
   });
   if (error) return { error: error.message };
+  await invalidateAreaConsumers();
   revalidateAreaConsumers();
   return { success: true };
 }
@@ -77,6 +90,7 @@ export async function toggleAreaOption(id: string, is_active: boolean) {
     .update({ is_active })
     .eq("id", id);
   if (error) return { error: error.message };
+  await invalidateAreaConsumers();
   revalidatePath("/admin/areas");
   return { success: true };
 }

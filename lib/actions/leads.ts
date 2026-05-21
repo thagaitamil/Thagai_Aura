@@ -6,6 +6,8 @@ import { createClient } from "@/lib/supabase/server";
 import { canWriteLeads, getSessionProfile } from "@/lib/auth/session";
 import { friendlyActionError } from "@/lib/actions/error-messages";
 import { titleCaseName } from "@/lib/text-format";
+import { invalidateCacheTags } from "@/lib/cache/redis";
+import { cacheTags, leadMutationTags } from "@/lib/cache/tags";
 
 const leadBase = z.object({
   name: z.string().trim().min(1, "Enter the lead name.").max(300, "Lead name is too long."),
@@ -62,6 +64,16 @@ async function assertLeadWriteAccess(
     .eq("assigned_to", profile.id)
     .maybeSingle();
   return !!data;
+}
+
+async function invalidateLeadWrite(leadId?: string | null, supplyIds: string[] = []) {
+  await invalidateCacheTags([
+    ...leadMutationTags(leadId),
+    ...supplyIds.filter(Boolean).flatMap((supplyId) => [
+      cacheTags.supply(supplyId),
+      cacheTags.supplyList,
+    ]),
+  ]);
 }
 
 export async function createLead(formData: FormData) {
@@ -150,6 +162,7 @@ export async function createLead(formData: FormData) {
     if (mapErr) return { error: friendlyActionError(mapErr) };
     revalidatePath(`/supply/${primarySupply}`);
   }
+  await invalidateLeadWrite(data?.id, primarySupply ? [primarySupply] : []);
   revalidatePath("/leads");
   revalidatePath("/dashboard");
   return { success: true as const, id: data!.id };
@@ -235,6 +248,11 @@ export async function updateLead(id: string, formData: FormData) {
     await supabase.from("lead_assignments").delete().eq("lead_id", id);
   }
 
+  const { data: previousMappings } = await supabase
+    .from("supply_mapping")
+    .select("supply_id")
+    .eq("lead_id", id);
+
   if (parsed.data.status === "converted" && primarySupply) {
     await supabase.from("supply_mapping").delete().eq("lead_id", id);
     const { error: mapErr } = await supabase.from("supply_mapping").insert({
@@ -246,8 +264,14 @@ export async function updateLead(id: string, formData: FormData) {
     });
     if (mapErr) return { error: friendlyActionError(mapErr) };
     revalidatePath(`/supply/${primarySupply}`);
+  } else {
+    await supabase.from("supply_mapping").delete().eq("lead_id", id);
   }
 
+  await invalidateLeadWrite(id, [
+    ...(previousMappings ?? []).map((row) => row.supply_id as string),
+    ...(primarySupply ? [primarySupply] : []),
+  ]);
   revalidatePath("/leads");
   revalidatePath(`/leads/${id}`);
   revalidatePath("/dashboard");
@@ -271,6 +295,7 @@ export async function addLeadActivity(
     created_by: profile.id,
   });
   if (error) return { error: friendlyActionError(error) };
+  await invalidateLeadWrite(leadId);
   revalidatePath(`/leads/${leadId}`);
   return { success: true };
 }
@@ -286,6 +311,10 @@ export async function saveLeadMappings(
   const supabase = createClient();
   const ok = await assertLeadWriteAccess(supabase, profile, leadId);
   if (!ok) return { error: "Forbidden" };
+  const { data: previousMappings } = await supabase
+    .from("supply_mapping")
+    .select("supply_id")
+    .eq("lead_id", leadId);
   await supabase.from("supply_mapping").delete().eq("lead_id", leadId);
   const rows: {
     lead_id: string;
@@ -318,6 +347,10 @@ export async function saveLeadMappings(
     const { error } = await supabase.from("supply_mapping").insert(dedupedRows);
     if (error) return { error: friendlyActionError(error) };
   }
+  await invalidateLeadWrite(leadId, [
+    ...(previousMappings ?? []).map((row) => row.supply_id as string),
+    ...dedupedRows.map((row) => row.supply_id),
+  ]);
   revalidatePath(`/leads/${leadId}`);
   return { success: true };
 }
@@ -332,11 +365,17 @@ export async function updateMappingTrial(
   const supabase = createClient();
   const ok = await assertLeadWriteAccess(supabase, profile, leadId);
   if (!ok) return { error: "Forbidden" };
+  const { data: mapping } = await supabase
+    .from("supply_mapping")
+    .select("supply_id")
+    .eq("id", mappingId)
+    .maybeSingle();
   const { error } = await supabase
     .from("supply_mapping")
     .update({ trial_status, updated_at: new Date().toISOString() })
     .eq("id", mappingId);
   if (error) return { error: friendlyActionError(error) };
+  await invalidateLeadWrite(leadId, mapping?.supply_id ? [mapping.supply_id as string] : []);
   revalidatePath(`/leads/${leadId}`);
   return { success: true };
 }
@@ -351,11 +390,17 @@ export async function setMappingReserved(
   const supabase = createClient();
   const ok = await assertLeadWriteAccess(supabase, profile, leadId);
   if (!ok) return { error: "Forbidden" };
+  const { data: mapping } = await supabase
+    .from("supply_mapping")
+    .select("supply_id")
+    .eq("id", mappingId)
+    .maybeSingle();
   const { error } = await supabase
     .from("supply_mapping")
     .update({ is_reserved, updated_at: new Date().toISOString() })
     .eq("id", mappingId);
   if (error) return { error: friendlyActionError(error) };
+  await invalidateLeadWrite(leadId, mapping?.supply_id ? [mapping.supply_id as string] : []);
   revalidatePath(`/leads/${leadId}`);
   return { success: true };
 }
@@ -388,6 +433,7 @@ export async function uploadLeadDocument(formData: FormData) {
     uploaded_by: profile.id,
   });
   if (error) return { error: friendlyActionError(error) };
+  await invalidateLeadWrite(leadId);
   revalidatePath(`/leads/${leadId}`);
   return { success: true };
 }
@@ -420,6 +466,7 @@ export async function addLeadFollowUpRow(leadId: string, formData: FormData) {
       follow_up_notes: notes || null,
     })
     .eq("id", leadId);
+  await invalidateLeadWrite(leadId);
   revalidatePath(`/leads/${leadId}`);
   revalidatePath("/leads");
   revalidatePath("/dashboard");
@@ -445,6 +492,7 @@ export async function setLeadFollowUpOutcome(
     .eq("id", followUpId)
     .eq("lead_id", leadId);
   if (error) return { error: friendlyActionError(error) };
+  await invalidateLeadWrite(leadId);
   revalidatePath(`/leads/${leadId}`);
   revalidatePath("/leads");
   revalidatePath("/dashboard");

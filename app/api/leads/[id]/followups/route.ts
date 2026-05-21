@@ -1,19 +1,30 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireApiProfile } from "@/lib/api/response";
+import { cached } from "@/lib/cache/redis";
+import { cacheTags } from "@/lib/cache/tags";
 
 export async function GET(_: Request, { params }: { params: { id: string } }) {
-  const { response } = await requireApiProfile();
+  const { profile, response } = await requireApiProfile();
   if (response) return response;
 
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from("lead_follow_ups")
-    .select("id, due_at, notes, outcome, completed_at, created_at")
-    .eq("lead_id", params.id)
-    .order("created_at", { ascending: false })
-    .limit(100);
+  const payload = await cached({
+    key: `api:${profile!.id}:lead:${params.id}:followups`,
+    tags: [cacheTags.lead(params.id), cacheTags.dashboard],
+    ttlSeconds: 30,
+    getFresh: async () => {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("lead_follow_ups")
+        .select("id, due_at, notes, outcome, completed_at, created_at")
+        .eq("lead_id", params.id)
+        .order("created_at", { ascending: false })
+        .limit(100);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ followUps: data ?? [] });
+      if (error) throw error;
+      return { followUps: data ?? [] };
+    },
+  });
+
+  return NextResponse.json(payload);
 }

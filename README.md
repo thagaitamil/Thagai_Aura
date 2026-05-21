@@ -16,6 +16,21 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Redis Cache
+
+The app can use Upstash Redis for server-side caching of tab data, search results,
+area lookups, and supply picker results. Add these server env values when the
+Upstash project is ready:
+
+```bash
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+REDIS_CACHE_PREFIX=aura
+```
+
+If those env values are not present, the app still runs with a short in-process
+memory cache for local development.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.

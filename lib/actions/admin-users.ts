@@ -5,6 +5,8 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/admin";
 import { getSessionProfile, isAdmin } from "@/lib/auth/session";
+import { invalidateCacheTags } from "@/lib/cache/redis";
+import { cacheTags } from "@/lib/cache/tags";
 
 const inviteSchema = z.object({
   email: z.string().email(),
@@ -54,6 +56,7 @@ export async function inviteTeamMember(formData: FormData) {
       })
       .eq("id", data.user.id);
   }
+  await invalidateCacheTags([cacheTags.profiles, cacheTags.dashboard]);
   revalidatePath("/admin/users");
   return { success: true };
 }
@@ -72,6 +75,7 @@ export async function setUserActive(userId: string, active: boolean) {
     .update({ active })
     .eq("id", userId);
   if (error) return { error: error.message };
+  await invalidateCacheTags([cacheTags.profiles, cacheTags.dashboard]);
   revalidatePath("/admin/users");
   return { success: true };
 }

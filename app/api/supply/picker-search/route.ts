@@ -3,6 +3,8 @@ import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { getPublicSupabaseKey } from "@/lib/supabase/env-keys";
 import { parseSupplySearchToken } from "@/lib/display-ids";
+import { cached } from "@/lib/cache/redis";
+import { cacheTags } from "@/lib/cache/tags";
 
 export async function GET(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
@@ -40,28 +42,37 @@ export async function GET(request: NextRequest) {
   const q = (request.nextUrl.searchParams.get("q") ?? "").trim();
   if (q.length < 1) return NextResponse.json({ rows: [] });
 
-  const num = parseSupplySearchToken(q);
+  const payload = await cached({
+    key: `supply:picker:${user.id}:${q.toLowerCase()}`,
+    tags: [cacheTags.supplyList],
+    ttlSeconds: 60,
+    getFresh: async () => {
+      const num = parseSupplySearchToken(q);
 
-  if (num != null) {
-    const { data } = await supabase
-      .from("supply_profiles")
-      .select("id, full_name, supply_number")
-      .is("deleted_at", null)
-      .eq("supply_number", num)
-      .limit(10);
-    if (data?.length) {
-      return NextResponse.json({ rows: data });
-    }
-  }
+      if (num != null) {
+        const { data } = await supabase
+          .from("supply_profiles")
+          .select("id, full_name, supply_number")
+          .is("deleted_at", null)
+          .eq("supply_number", num)
+          .limit(10);
+        if (data?.length) {
+          return { rows: data };
+        }
+      }
 
-  const pat = `%${q.replace(/[%_\\]/g, "")}%`;
-  const { data } = await supabase
-    .from("supply_profiles")
-    .select("id, full_name, supply_number")
-    .is("deleted_at", null)
-    .ilike("full_name", pat)
-    .order("full_name", { ascending: true })
-    .limit(20);
+      const pat = `%${q.replace(/[%_\\]/g, "")}%`;
+      const { data } = await supabase
+        .from("supply_profiles")
+        .select("id, full_name, supply_number")
+        .is("deleted_at", null)
+        .ilike("full_name", pat)
+        .order("full_name", { ascending: true })
+        .limit(20);
 
-  return NextResponse.json({ rows: data ?? [] });
+      return { rows: data ?? [] };
+    },
+  });
+
+  return NextResponse.json(payload);
 }
