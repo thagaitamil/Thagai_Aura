@@ -13,6 +13,7 @@ export const CACHE_TTL_SECONDS = 60 * 60;
 
 const appPrefix = process.env.REDIS_CACHE_PREFIX ?? "aura";
 const memoryCache = new Map<string, { expiresAt: number; value: unknown }>();
+const memoryTagVersions = new Map<string, number>();
 
 let redis: Redis | null | undefined;
 
@@ -51,9 +52,13 @@ function memorySet<T>(key: string, value: T, ttlSeconds: number) {
 async function getTagVersion(tag: string) {
   const client = getRedis();
   const key = namespaced(`tag:${tag}:v`);
+  const localVersion = memoryTagVersions.get(key);
+  if (localVersion !== undefined) return String(localVersion);
   if (!client) return String(memoryGet<number>(key) ?? 0);
   const value = await client.get<number>(key).catch(() => null);
-  return String(value ?? 0);
+  const version = value ?? 0;
+  memoryTagVersions.set(key, version);
+  return String(version);
 }
 
 async function buildVersionedKey(key: string, tags: string[] = []) {
@@ -64,20 +69,25 @@ async function buildVersionedKey(key: string, tags: string[] = []) {
 
 export async function cached<T>({ key, ttlSeconds, tags = [], getFresh }: CacheOptions<T>): Promise<T> {
   const cacheKey = await buildVersionedKey(key, tags);
+  const localHit = memoryGet<T>(cacheKey);
+  if (localHit !== null) return localHit;
+
   const client = getRedis();
 
   if (!client) {
-    const hit = memoryGet<T>(cacheKey);
-    if (hit !== null) return hit;
     const fresh = await getFresh();
     memorySet(cacheKey, fresh, ttlSeconds);
     return fresh;
   }
 
   const hit = await client.get<T>(cacheKey).catch(() => null);
-  if (hit !== null) return hit;
+  if (hit !== null) {
+    memorySet(cacheKey, hit, ttlSeconds);
+    return hit;
+  }
 
   const fresh = await getFresh();
+  memorySet(cacheKey, fresh, ttlSeconds);
   await client.set(cacheKey, fresh, { ex: ttlSeconds }).catch(() => undefined);
   return fresh;
 }
@@ -88,13 +98,19 @@ export async function invalidateCacheTags(tags: string[]) {
   if (!client) {
     for (const tag of tags) {
       const key = namespaced(`tag:${tag}:v`);
-      memorySet(key, (memoryGet<number>(key) ?? 0) + 1, 60 * 60 * 24);
+      const next = (memoryGet<number>(key) ?? memoryTagVersions.get(key) ?? 0) + 1;
+      memorySet(key, next, 60 * 60 * 24);
+      memoryTagVersions.set(key, next);
     }
     return;
   }
 
   await Promise.all(
-    tags.map((tag) => client.incr(namespaced(`tag:${tag}:v`)).catch(() => undefined)),
+    tags.map(async (tag) => {
+      const key = namespaced(`tag:${tag}:v`);
+      const next = await client.incr(key).catch(() => null);
+      if (next != null) memoryTagVersions.set(key, next);
+    }),
   );
 }
 

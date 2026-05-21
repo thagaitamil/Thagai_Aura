@@ -10,6 +10,24 @@ import { Button } from "@/components/ui/button";
 import { PickerPopover } from "@/components/shared/picker-popover";
 
 type Area = { id: string; label: string };
+const areaSearchCache = new Map<string, { expiresAt: number; areas: Area[] }>();
+const AREA_SEARCH_CACHE_MS = 60 * 60 * 1000;
+
+function readAreaSearchCache(query: string) {
+  const hit = areaSearchCache.get(query.toLowerCase());
+  if (!hit || hit.expiresAt < Date.now()) {
+    areaSearchCache.delete(query.toLowerCase());
+    return null;
+  }
+  return hit.areas;
+}
+
+function writeAreaSearchCache(query: string, areas: Area[]) {
+  areaSearchCache.set(query.toLowerCase(), {
+    expiresAt: Date.now() + AREA_SEARCH_CACHE_MS,
+    areas,
+  });
+}
 
 export function AreaTagPicker({
   fieldName = "area_option_id",
@@ -26,7 +44,7 @@ export function AreaTagPicker({
 }) {
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
-  const [hits, setHits] = useState<Area[]>([]);
+  const [hits, setHits] = useState<Area[]>(() => initialAreas.slice(0, 50));
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
@@ -40,10 +58,22 @@ export function AreaTagPicker({
   const selectedIds = useMemo(() => new Set(selected.map((s) => s.id)), [selected]);
 
   const refreshHits = useCallback(async (query: string, signal: AbortSignal, seq: number) => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setHits(initialAreas.slice(0, 50));
+      setLoading(false);
+      return;
+    }
+    const cached = readAreaSearchCache(trimmed);
+    if (cached) {
+      setHits(cached);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetch(
-        `/api/areas/search?q=${encodeURIComponent(query)}`,
+        `/api/areas/search?q=${encodeURIComponent(trimmed)}`,
         { credentials: "include", signal }
       );
       if (seq !== searchSeq.current) return;
@@ -52,15 +82,23 @@ export function AreaTagPicker({
         return;
       }
       const data = (await res.json()) as { areas?: Area[] };
-      setHits(data.areas ?? []);
+      const areas = data.areas ?? [];
+      writeAreaSearchCache(trimmed, areas);
+      setHits(areas);
     } catch {
       if (!signal.aborted) setHits([]);
     } finally {
       if (seq === searchSeq.current) setLoading(false);
     }
-  }, []);
+  }, [initialAreas]);
 
   useEffect(() => {
+    if (!open) return;
+    if (!q.trim()) {
+      setHits(initialAreas.slice(0, 50));
+      setLoading(false);
+      return;
+    }
     const controller = new AbortController();
     const seq = searchSeq.current + 1;
     searchSeq.current = seq;
@@ -71,7 +109,7 @@ export function AreaTagPicker({
       controller.abort();
       clearTimeout(t);
     };
-  }, [q, refreshHits]);
+  }, [initialAreas, open, q, refreshHits]);
 
   function toggleArea(a: Area) {
     if (selectedIds.has(a.id)) {
